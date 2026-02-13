@@ -2,15 +2,15 @@
  * Main - エントリーポイント
  * v20260208-1200: 中断・再開機能実装
  */
-import { Logger } from './logger.js?v=20260212-2350';
-import { GameState } from './gameState.js?v=20260212-2350';
-import { CardManager } from './cardManager.js?v=20260212-2350';
-import { TurnManager } from './turnManager.js?v=20260212-2350';
-import { ScoreManager } from './scoreManager.js?v=20260212-2350';
-import { UIController } from './uiController.js?v=20260212-2350';
-import { SaveManager } from './saveManager.js?v=20260212-2350';
+import { Logger } from './logger.js?v=20260213-2240';
+import { GameState } from './gameState.js?v=20260213-2240';
+import { CardManager } from './cardManager.js?v=20260213-2240';
+import { TurnManager } from './turnManager.js?v=20260213-2240';
+import { ScoreManager } from './scoreManager.js?v=20260213-2240';
+import { UIController } from './uiController.js?v=20260213-2240';
+import { SaveManager } from './saveManager.js?v=20260213-2240';
 
-const CACHE_BUSTER = 'v20260212-2350';
+const CACHE_BUSTER = 'v20260213-2240';
 
 // ビルドバージョンをグローバルに公開
 window.BUILD_VERSION = CACHE_BUSTER;
@@ -156,6 +156,72 @@ document.addEventListener('DOMContentLoaded', async () => {
         );
         console.table(matches.map(c => ({ name: c.cardName, category: c.category, rarity: c.rarity, effect: c.effect })));
         return matches;
+    };
+
+    /**
+     * デバッグ関数: 任意のターンにスキップ
+     * 使い方: debugSkipToTurn(7) で7ターン目（4月下旬）の研修フェーズから開始
+     * @param {number} targetTurn - 0〜7のターン番号
+     */
+    window.debugSkipToTurn = function (targetTurn) {
+        if (targetTurn < 0 || targetTurn > 7) {
+            console.error('[DEBUG] ターン番号は0〜7で指定してください');
+            return;
+        }
+
+        console.log(`[DEBUG] ターン${targetTurn + 1}にスキップ中...`);
+
+        // ゲーム状態をリセット
+        game.gameState.reset();
+
+        // 研修候補プールを初期化
+        game.cardManager.initTrainingPool();
+
+        // 基本カード（N）をデッキに追加
+        const basicCards = game.cardManager.getBasicCards();
+        basicCards.forEach(card => game.gameState.player.deck.push(card));
+
+        // R・SRカードを適当にデッキに追加（ターン数に応じて増加）
+        const rCards = game.cardManager.allCards.filter(c => c.rarity === 'R');
+        const srCards = game.cardManager.allCards.filter(c => c.rarity === 'SR');
+        const ssrCards = game.cardManager.allCards.filter(c => c.rarity === 'SSR');
+
+        // ターン数に応じてカードを追加（初回2枚 + 各ターン1枚）
+        const extraCardCount = Math.min(2 + targetTurn, rCards.length + srCards.length);
+        const shuffled = [...rCards, ...srCards, ...ssrCards].sort(() => Math.random() - 0.5);
+        for (let i = 0; i < extraCardCount && i < shuffled.length; i++) {
+            game.gameState.player.deck.push({ ...shuffled[i] });
+        }
+
+        // ステータスを適当な値に設定
+        game.gameState.player.experience = Math.floor(Math.random() * 6) + 3;
+        game.gameState.player.enrollment = Math.floor(Math.random() * 6) + 3;
+        game.gameState.player.satisfaction = Math.floor(Math.random() * 6) + 3;
+        game.gameState.player.accounting = Math.floor(Math.random() * 6) + 3;
+
+        // ターンとフェーズを設定
+        game.gameState.turn = targetTurn;
+        game.gameState.phase = 'training';
+
+        // スタートオーバーレイを非表示
+        const overlay = document.getElementById('start-overlay');
+        overlay?.classList.add('hidden');
+
+        // UI更新
+        game.uiController.updateStatusDisplay();
+
+        const config = game.turnManager.getCurrentTurnConfig();
+        console.log(`[DEBUG] ターン${targetTurn + 1} (${config.name}) にスキップ完了`);
+        console.log(`[DEBUG] デッキ: ${game.gameState.player.deck.length}枚, 研修: ${config.training}, 削除: ${config.delete}`);
+
+        // 最終ターンの場合は教室行動フェーズから
+        if (targetTurn === 7) {
+            game.turnManager.startActionPhase();
+            game.uiController.showActionPhase();
+        } else {
+            // 研修フェーズを表示
+            game.uiController.showTrainingPhase();
+        }
     };
 
     // URLからデバッグ設定を読み込み

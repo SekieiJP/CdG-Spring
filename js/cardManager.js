@@ -56,11 +56,6 @@ export class CardManager {
                 };
 
                 this.allCards.push(card);
-
-                // レアリティ別デッキに追加
-                if (this.trainingDecks[card.rarity]) {
-                    this.trainingDecks[card.rarity].push(card);
-                }
             } else if (parts.length >= 4) {
                 // 旧形式（互換性維持）: category, rarity, cardName, effect
                 const card = {
@@ -72,10 +67,6 @@ export class CardManager {
                 };
 
                 this.allCards.push(card);
-
-                if (this.trainingDecks[card.rarity]) {
-                    this.trainingDecks[card.rarity].push(card);
-                }
             }
         }
     }
@@ -112,11 +103,11 @@ export class CardManager {
     }
 
     /**
-     * 基本カード（N）を取得
+     * 基本カード（N）を取得（各2枚ずつ）
      */
     getBasicCards() {
         const basicCards = [];
-        const nCards = this.trainingDecks.N;
+        const nCards = this.allCards.filter(c => c.rarity === 'N');
 
         // 各基本カードを2枚ずつ
         nCards.forEach(card => {
@@ -125,6 +116,30 @@ export class CardManager {
         });
 
         return basicCards;
+    }
+
+    /**
+     * 研修候補プールを初期化（各カード2枚ずつ搭載）
+     * ゲーム開始時に呼び出す
+     */
+    initTrainingPool() {
+        this.trainingDecks = { N: [], R: [], SR: [], SSR: [] };
+
+        this.allCards.forEach(card => {
+            if (this.trainingDecks[card.rarity]) {
+                this.trainingDecks[card.rarity].push({ ...card });
+                this.trainingDecks[card.rarity].push({ ...card });
+            }
+        });
+
+        // 各レアリティをシャッフル
+        ['R', 'SR', 'SSR'].forEach(rarity => this.shuffleTrainingDeck(rarity));
+
+        this.logger?.log('研修候補プールを初期化しました', 'info');
+        for (const rarity of ['R', 'SR', 'SSR']) {
+            const uniqueCount = new Set(this.trainingDecks[rarity].map(c => c.cardName)).size;
+            this.logger?.log(`  ${rarity}: ${this.trainingDecks[rarity].length}枚 (${uniqueCount}種)`, 'info');
+        }
     }
 
     /**
@@ -139,7 +154,9 @@ export class CardManager {
     }
 
     /**
-     * 研修カードを引く（デバッグモード対応）
+     * 研修カードを引く
+     * 異なるカード名を count 種選び、各1枚をプールから除外して返す
+     * （デバッグモード対応）
      */
     drawTrainingCards(rarity, count) {
         if (!this.trainingDecks[rarity]) {
@@ -149,39 +166,57 @@ export class CardManager {
 
         const deck = this.trainingDecks[rarity];
         const drawn = [];
+        const usedNames = new Set();
 
         // デバッグモード: 指定カードを優先的に引く
         if (window?.debugCards?.training?.length > 0) {
             for (const cardName of window.debugCards.training) {
                 if (drawn.length >= count) break;
+                if (usedNames.has(cardName)) continue;
 
-                // デッキからカード名で検索
                 const idx = deck.findIndex(c => c.cardName === cardName);
                 if (idx !== -1) {
                     const card = deck.splice(idx, 1)[0];
                     drawn.push({ ...card });
+                    usedNames.add(cardName);
                     this.logger?.log(`[DEBUG] 研修カード優先引き: ${cardName}`, 'info');
                 } else {
-                    // 全カードから検索してコピー
                     const searchCard = this.allCards.find(c => c.cardName === cardName);
                     if (searchCard) {
                         drawn.push({ ...searchCard });
-                        this.logger?.log(`[DEBUG] 研修カード挿入: ${cardName} (デッキ外)`, 'info');
+                        usedNames.add(cardName);
+                        this.logger?.log(`[DEBUG] 研修カード挿入: ${cardName} (プール外)`, 'info');
                     }
                 }
             }
         }
 
-        // 残りの枚数を通常通り引く
-        for (let i = drawn.length; i < count; i++) {
-            if (deck.length === 0) {
-                // デッキが空の場合は何も引けない
-                this.logger?.log(`研修会場の${rarity}デッキが空です`, 'info');
-                break;
-            }
-            drawn.push({ ...deck.pop() });
+        // 残りの枚数をプールから異なるカード名で引く
+        // プール内のユニークなカード名を収集してシャッフル
+        const availableNames = [...new Set(deck.map(c => c.cardName))]
+            .filter(name => !usedNames.has(name));
+
+        // シャッフル（Fisher-Yates）
+        for (let i = availableNames.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [availableNames[i], availableNames[j]] = [availableNames[j], availableNames[i]];
         }
 
+        for (let i = drawn.length; i < count; i++) {
+            if (availableNames.length === 0) {
+                this.logger?.log(`研修候補プールの${rarity}カードが不足しています`, 'info');
+                break;
+            }
+
+            const name = availableNames.shift();
+            const idx = deck.findIndex(c => c.cardName === name);
+            if (idx !== -1) {
+                const card = deck.splice(idx, 1)[0];
+                drawn.push({ ...card });
+            }
+        }
+
+        this.logger?.log(`研修カード提示: ${drawn.map(c => c.cardName).join(', ')} (${rarity}プール残: ${deck.length}枚)`, 'info');
         return drawn;
     }
 

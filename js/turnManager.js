@@ -195,6 +195,9 @@ export class TurnManager {
     initializeGame() {
         this.gameState.reset();
 
+        // 研修候補プールを初期化（各カード2枚ずつ）
+        this.cardManager.initTrainingPool();
+
         // 基本カード（N）を取得
         const basicCards = this.cardManager.getBasicCards();
         basicCards.forEach(card => {
@@ -202,11 +205,6 @@ export class TurnManager {
         });
 
         this.logger?.log(`基本カード${basicCards.length}枚をデッキに追加`, 'info');
-
-        // 研修会場のデッキをシャッフル
-        ['R', 'SR', 'SSR'].forEach(rarity => {
-            this.cardManager.shuffleTrainingDeck(rarity);
-        });
 
         // 初回研修（R x4枚から2枚選択）は別途処理
         this.logger?.log('ゲーム開始: 初回研修でRカード4枚から2枚選択してください', 'info');

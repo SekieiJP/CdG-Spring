@@ -40,8 +40,8 @@ export class UIController {
 
         window.addEventListener('scroll', () => {
             const panelRect = fullStatusPanel.getBoundingClientRect();
-            // ステータスパネルが完全に画面外に出たらコンパクトヘッダーを表示
-            if (panelRect.bottom < 0) {
+            // ステータスパネルが少しでも隠れたらコンパクトヘッダーを表示
+            if (panelRect.top < 0) {
                 stickyHeader.classList.remove('hidden');
             } else {
                 stickyHeader.classList.add('hidden');
@@ -925,7 +925,16 @@ export class UIController {
     finishActionPhase() {
         this.updateStatusDisplay();
         this.turnManager.advancePhase();
-        this.showMeetingPhase();
+
+        // advancePhaseの結果に応じてUIを切り替え
+        if (this.gameState.phase === 'end') {
+            this.showResultPhase();
+        } else if (this.gameState.phase === 'meeting') {
+            this.showMeetingPhase();
+        } else if (this.gameState.phase === 'training') {
+            // delete=0でmeetingがスキップされた場合
+            this.showTrainingPhase();
+        }
     }
 
     /**
@@ -1126,6 +1135,10 @@ export class UIController {
      * 結果フェーズ表示
      */
     showResultPhase() {
+        // 最終ターンのカード情報を保存（結果画面表示用）
+        const finalDeck = [...this.gameState.player.deck.map(c => ({ ...c })),
+        ...this.gameState.player.hand.map(c => ({ ...c }))];
+
         const score = this.scoreManager.calculateScore(this.gameState);
 
         this.showPhaseArea('result');
@@ -1183,6 +1196,48 @@ export class UIController {
         if (highScoreElem && highScore) {
             highScoreElem.textContent = `${highScore.points}ポイント`;
         }
+
+        // セーブデータクリア（ゲーム終了）
+        this.saveManager?.clear();
+
+        // 最終ターンのカード一覧表示
+        this.renderFinalCards(finalDeck);
+    }
+
+    /**
+     * 最終結果画面に所有カード一覧を表示
+     * @param {Array} cards - 最終ターンの全カード
+     */
+    renderFinalCards(cards) {
+        const container = document.getElementById('result-cards');
+        if (!container) return;
+
+        container.innerHTML = '';
+
+        if (cards.length === 0) return;
+
+        const heading = document.createElement('h3');
+        heading.className = 'result-cards-heading';
+        heading.textContent = `所有カード一覧（${cards.length}枚）`;
+        container.appendChild(heading);
+
+        const grid = document.createElement('div');
+        grid.className = 'result-cards-grid';
+
+        // レアリティ順→カテゴリ順にソート
+        const rarityOrder = { SSR: 0, SR: 1, R: 2, N: 3 };
+        cards.sort((a, b) => {
+            const rDiff = (rarityOrder[a.rarity] ?? 9) - (rarityOrder[b.rarity] ?? 9);
+            if (rDiff !== 0) return rDiff;
+            return a.category.localeCompare(b.category);
+        });
+
+        cards.forEach(card => {
+            const cardElem = this.createCardElement(card, { compact: true });
+            grid.appendChild(cardElem);
+        });
+
+        container.appendChild(grid);
     }
 
     /**

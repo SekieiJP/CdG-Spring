@@ -741,6 +741,53 @@ body {
     color: var(--color-text-secondary);
 }
 
+/* 最終結果カード一覧 */
+.result-cards-heading {
+    font-size: 1rem;
+    margin: var(--spacing-lg) 0 var(--spacing-sm);
+    color: var(--color-text);
+    border-bottom: 2px solid var(--color-primary);
+    padding-bottom: var(--spacing-xs);
+}
+
+.result-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--spacing-xs);
+    margin-bottom: var(--spacing-lg);
+}
+
+.result-cards-grid .card {
+    font-size: 0.65rem;
+    padding: var(--spacing-xs);
+    min-height: auto;
+}
+
+.result-cards-grid .card-header {
+    margin-bottom: 2px;
+}
+
+.result-cards-grid .card-name {
+    font-size: 0.7rem;
+}
+
+.result-cards-grid .card-meta {
+    font-size: 0.6rem;
+    margin-bottom: 2px;
+}
+
+.result-cards-grid .card-effect {
+    font-size: 0.55rem;
+    line-height: 1.3;
+    max-height: 2.6em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
 .result-actions {
     display: grid;
     gap: var(--spacing-md);
