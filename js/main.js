@@ -2,15 +2,15 @@
  * Main - エントリーポイント
  * v20260208-1200: 中断・再開機能実装
  */
-import { Logger } from './logger.js?v=20260213-2240';
-import { GameState } from './gameState.js?v=20260213-2240';
-import { CardManager } from './cardManager.js?v=20260213-2240';
-import { TurnManager } from './turnManager.js?v=20260213-2240';
-import { ScoreManager } from './scoreManager.js?v=20260213-2240';
-import { UIController } from './uiController.js?v=20260213-2240';
-import { SaveManager } from './saveManager.js?v=20260213-2240';
+import { Logger } from './logger.js?v=20260213-2340';
+import { GameState } from './gameState.js?v=20260213-2340';
+import { CardManager } from './cardManager.js?v=20260213-2340';
+import { TurnManager } from './turnManager.js?v=20260213-2340';
+import { ScoreManager } from './scoreManager.js?v=20260213-2340';
+import { UIController } from './uiController.js?v=20260213-2340';
+import { SaveManager } from './saveManager.js?v=20260213-2340';
 
-const CACHE_BUSTER = 'v20260213-2240';
+const CACHE_BUSTER = 'v20260213-2340';
 
 // ビルドバージョンをグローバルに公開
 window.BUILD_VERSION = CACHE_BUSTER;
@@ -58,6 +58,8 @@ class Game {
                 // ビルドバージョンチェック
                 if (!this.saveManager.isVersionMatch(saveData)) {
                     this.logger.log('ゲームが更新されたため、セーブデータをリセットします', 'info');
+                    // アップデート情報バッジ用フラグを立てる
+                    localStorage.setItem('cdg_version_updated', 'true');
                     alert(`ゲームが更新されました。\n\n保存時: ${saveData.buildVersion}\n現在: ${CACHE_BUSTER}\n\n新しいゲームを開始してください。`);
                     this.saveManager.clear();
                 } else {
@@ -74,7 +76,48 @@ class Game {
             this.showSharedScore(sharedScore);
         }
 
+        // 通知バッジ判定
+        this.updateNotificationBadges();
+
         this.logger.log('初期化完了: ゲーム開始ボタンを押してください', 'info');
+    }
+
+    /**
+     * 通知バッジの表示判定
+     */
+    updateNotificationBadges() {
+        // 遊び方バッジ: cdg_visited がなければ初回アクセス
+        const visited = localStorage.getItem('cdg_visited');
+        if (!visited) {
+            const badge = document.getElementById('badge-tutorial');
+            if (badge) badge.classList.remove('hidden');
+        }
+
+        // 遊び方リンクのクリック時に cdg_visited を保存
+        const tutorialLink = document.getElementById('link-tutorial');
+        if (tutorialLink) {
+            tutorialLink.addEventListener('click', () => {
+                localStorage.setItem('cdg_visited', 'true');
+            });
+        }
+
+        // アップデート情報バッジ: cdg_version_updated フラグがある場合
+        const versionUpdated = localStorage.getItem('cdg_version_updated');
+        if (versionUpdated) {
+            const badge = document.getElementById('badge-release-note');
+            if (badge) badge.classList.remove('hidden');
+        }
+
+        // アップデート情報リンクのクリック時にフラグをクリア
+        const releaseLink = document.getElementById('link-release-note');
+        if (releaseLink) {
+            releaseLink.addEventListener('click', () => {
+                localStorage.removeItem('cdg_version_updated');
+            });
+        }
+
+        // タイトル画面を表示した事実を保存
+        localStorage.setItem('cdg_visited', 'true');
     }
 
     /**

@@ -1543,8 +1543,25 @@ export class UIController {
 
         const buildVersion = window.BUILD_VERSION || 'unknown';
 
+        // バッジ表示判定
+        const showTutorialBadge = !localStorage.getItem('cdg_visited');
+        const showReleaseBadge = !!localStorage.getItem('cdg_version_updated');
+
         content.innerHTML = `
             <div class="settings-content">
+                <div class="settings-section">
+                    <h3>リンク</h3>
+                    <div class="settings-links">
+                        <a class="settings-link-btn" href="tutorial.html" id="settings-link-tutorial">
+                            📖 遊び方
+                            ${showTutorialBadge ? '<span class="notify-badge">！</span>' : ''}
+                        </a>
+                        <a class="settings-link-btn" href="releaseNote.html" id="settings-link-release">
+                            📢 アップデート情報
+                            ${showReleaseBadge ? '<span class="notify-badge">！</span>' : ''}
+                        </a>
+                    </div>
+                </div>
                 <div class="settings-section">
                     <h3>ビルド情報</h3>
                     <p class="build-version">バージョン: ${buildVersion}</p>
@@ -1556,6 +1573,20 @@ export class UIController {
                 </div>
             </div>
         `;
+
+        // リンククリック時にバッジフラグ更新
+        const tutorialLink = content.querySelector('#settings-link-tutorial');
+        if (tutorialLink) {
+            tutorialLink.addEventListener('click', () => {
+                localStorage.setItem('cdg_visited', 'true');
+            });
+        }
+        const releaseLink = content.querySelector('#settings-link-release');
+        if (releaseLink) {
+            releaseLink.addEventListener('click', () => {
+                localStorage.removeItem('cdg_version_updated');
+            });
+        }
 
         content.querySelector('#reset-game-btn').addEventListener('click', () => {
             if (confirm('本当にはじめからやり直しますか？\n\n現在の進行状況はすべて失われます。')) {
