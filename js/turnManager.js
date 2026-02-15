@@ -55,6 +55,10 @@ export class TurnManager {
             // 削除枚数が0の場合は教室会議フェーズをスキップ
             if (config.delete === 0) {
                 this.logger?.log('[DEBUG] 削除枚数0のため教室会議フェーズをスキップ', 'info');
+
+                // 会議スキップ時もカードを回収する
+                this.gameState.returnAllToDeck();
+
                 this.gameState.phase = 'meeting'; // 一時的にmeetingへ
                 this.advancePhase(); // 即座に次のターンへ
             } else {

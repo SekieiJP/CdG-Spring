@@ -266,6 +266,7 @@ export class UIController {
         overlay?.classList.add('hidden');
 
         this.turnManager.initializeGame();
+        this.updateStatusDisplay();
 
         // 初回研修（Rカード4枚から2枚選択）
         this.showInitialTraining();
@@ -300,16 +301,30 @@ export class UIController {
         if (!container) return;
 
         container.innerHTML = '';
-        this.selectedInitialCards = [];
 
-        trainingCards.forEach(card => {
-            const cardElem = this.createCardElement(card, {
-                clickable: true,
-                compact: true,
-                onClick: (c, elem) => this.onInitialCardSelect(c, elem, trainingCards)
+        if (this.gameState.turn === 0) {
+            // 初回研修（4枚から2枚）
+            this.selectedInitialCards = [];
+            trainingCards.forEach(card => {
+                const cardElem = this.createCardElement(card, {
+                    clickable: true,
+                    compact: true,
+                    onClick: (c, elem) => this.onInitialCardSelect(c, elem, trainingCards)
+                });
+                container.appendChild(cardElem);
             });
-            container.appendChild(cardElem);
-        });
+        } else {
+            // 通常研修（3枚から1枚）
+            this.selectedTrainingCard = null;
+            trainingCards.forEach(card => {
+                const cardElem = this.createCardElement(card, {
+                    clickable: true,
+                    compact: true,
+                    onClick: (c, elem) => this.onTrainingCardSelect(c, elem, container)
+                });
+                container.appendChild(cardElem);
+            });
+        }
 
         this.showPhaseArea('training');
         this.updateTurnDisplay();
@@ -319,7 +334,7 @@ export class UIController {
             if (this.gameState.turn === 0) {
                 instruction.textContent = '初回研修: 4枚から2枚を選んで習得してください';
             } else {
-                instruction.textContent = '研修: 4枚から1枚を選んで習得してください';
+                instruction.textContent = '研修: 3枚から1枚を選んで習得してください';
             }
         }
     }
@@ -1010,6 +1025,15 @@ export class UIController {
      * 会議確定
      */
     onConfirmMeeting() {
+        // 削除可能枚数チェック
+        const config = this.turnManager.getCurrentTurnConfig();
+        if (this.selectedCardsForDeletion.length < config.delete) {
+            const confirmed = confirm('まだ削除できる枚数が残っています。次のターンに進んでよろしいですか？');
+            if (!confirmed) {
+                return;
+            }
+        }
+
         // カード削除
         this.selectedCardsForDeletion.forEach(card => {
             this.gameState.removeFromDeck(card);
@@ -1136,8 +1160,10 @@ export class UIController {
      */
     showResultPhase() {
         // 最終ターンのカード情報を保存（結果画面表示用）
-        const finalDeck = [...this.gameState.player.deck.map(c => ({ ...c })),
-        ...this.gameState.player.hand.map(c => ({ ...c }))];
+        const finalDeck = [
+            ...this.gameState.player.deck.map(c => ({ ...c })),
+            ...this.gameState.player.hand.map(c => ({ ...c }))
+        ];
 
         const score = this.scoreManager.calculateScore(this.gameState);
 

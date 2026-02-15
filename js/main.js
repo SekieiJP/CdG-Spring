@@ -2,15 +2,15 @@
  * Main - エントリーポイント
  * v20260208-1200: 中断・再開機能実装
  */
-import { Logger } from './logger.js?v=20260213-2340';
-import { GameState } from './gameState.js?v=20260213-2340';
-import { CardManager } from './cardManager.js?v=20260213-2340';
-import { TurnManager } from './turnManager.js?v=20260213-2340';
-import { ScoreManager } from './scoreManager.js?v=20260213-2340';
-import { UIController } from './uiController.js?v=20260213-2340';
-import { SaveManager } from './saveManager.js?v=20260213-2340';
+import { Logger } from './logger.js?v=20260215-2215';
+import { GameState } from './gameState.js?v=20260215-2215';
+import { CardManager } from './cardManager.js?v=20260215-2215';
+import { TurnManager } from './turnManager.js?v=20260215-2215';
+import { ScoreManager } from './scoreManager.js?v=20260215-2215';
+import { UIController } from './uiController.js?v=20260215-2215';
+import { SaveManager } from './saveManager.js?v=20260215-2215';
 
-const CACHE_BUSTER = 'v20260213-2340';
+const CACHE_BUSTER = 'v20260215-2240';
 
 // ビルドバージョンをグローバルに公開
 window.BUILD_VERSION = CACHE_BUSTER;
@@ -168,13 +168,8 @@ class Game {
 
 // ページ読み込み時に初期化
 document.addEventListener('DOMContentLoaded', async () => {
-    const game = new Game();
-
-    // デバッグ用: ゲームインスタンスをwindowに公開
-    window.game = game;
-    console.log('[DEBUG] ゲームインスタンスがwindow.gameに公開されました');
-
     // デバッグモード: URLパラメータまたはコンソールから設定可能
+    const game = new Game();
     window.debugCards = {
         training: [], // 研修会場に出したいカード名のリスト
         hand: []      // 手札に出したいカード名のリスト

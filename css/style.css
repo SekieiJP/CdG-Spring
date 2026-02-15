@@ -266,6 +266,12 @@ body {
     background: var(--color-bg-light);
 }
 
+/* 削除画面での選択ハイライト（赤） */
+#meeting-area .card.selected {
+    border-color: var(--color-danger);
+    background: rgba(239, 68, 68, 0.1);
+}
+
 .card.dragging {
     opacity: 0.5;
 }
