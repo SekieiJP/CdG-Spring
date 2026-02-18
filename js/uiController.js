@@ -338,9 +338,9 @@ export class UIController {
         const instruction = document.querySelector('#training-area .instruction');
         if (instruction) {
             if (this.gameState.turn === 0) {
-                instruction.textContent = '初回研修: 4枚から2枚を選んで習得してください';
+                instruction.textContent = '初回研修: 4枚から2枚を選んで習得してください[長押しで詳細]';
             } else {
-                instruction.textContent = '研修: 3枚から1枚を選んで習得してください';
+                instruction.textContent = '研修: 3枚から1枚を選んで習得してください[長押しで詳細]';
             }
         }
     }
