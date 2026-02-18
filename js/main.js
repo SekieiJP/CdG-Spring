@@ -2,15 +2,15 @@
  * Main - エントリーポイント
  * v20260208-1200: 中断・再開機能実装
  */
-import { Logger } from './logger.js?v=20260215-2215';
-import { GameState } from './gameState.js?v=20260215-2215';
-import { CardManager } from './cardManager.js?v=20260215-2215';
-import { TurnManager } from './turnManager.js?v=20260215-2215';
-import { ScoreManager } from './scoreManager.js?v=20260215-2215';
-import { UIController } from './uiController.js?v=20260215-2215';
-import { SaveManager } from './saveManager.js?v=20260215-2215';
+import { Logger } from './logger.js?v=20260219-0141';
+import { GameState } from './gameState.js?v=20260219-0141';
+import { CardManager } from './cardManager.js?v=20260219-0141';
+import { TurnManager } from './turnManager.js?v=20260219-0141';
+import { ScoreManager } from './scoreManager.js?v=20260219-0141';
+import { UIController } from './uiController.js?v=20260219-0141';
+import { SaveManager } from './saveManager.js?v=20260219-0141';
 
-const CACHE_BUSTER = 'v20260215-2240';
+const CACHE_BUSTER = 'v20260215-1430';
 
 // ビルドバージョンをグローバルに公開
 window.BUILD_VERSION = CACHE_BUSTER;

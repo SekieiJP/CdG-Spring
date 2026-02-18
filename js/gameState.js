@@ -215,7 +215,6 @@ export class GameState {
         this.clearPlaced();
 
         this.logger?.log('全カードをデッキに戻しました', 'info');
-        console.log('[DEBUG] returnAllToDeck: executed');
     }
 
     /**

@@ -266,7 +266,10 @@ export class UIController {
         overlay?.classList.add('hidden');
 
         this.turnManager.initializeGame();
+
+        // Bug2修正: リスタート時もステータス表示をリセット
         this.updateStatusDisplay();
+        this.updateTurnDisplay();
 
         // 初回研修（Rカード4枚から2枚選択）
         this.showInitialTraining();
@@ -316,6 +319,9 @@ export class UIController {
         } else {
             // 通常研修（3枚から1枚）
             this.selectedTrainingCard = null;
+            // Spec2修正: 1枚選択するまで確定ボタンを無効化
+            const confirmBtn = document.getElementById('confirm-training');
+            if (confirmBtn) confirmBtn.disabled = true;
             trainingCards.forEach(card => {
                 const cardElem = this.createCardElement(card, {
                     clickable: true,
@@ -967,6 +973,9 @@ export class UIController {
         if (maxDeleteElem) maxDeleteElem.textContent = config.delete;
 
         this.selectedCardsForDeletion = [];
+        // Bug3修正: 選択済み枚数の表示を0にリセット
+        const selectedCountElem = document.getElementById('selected-count');
+        if (selectedCountElem) selectedCountElem.textContent = '0';
         this.renderDeck(config.delete);
 
         // フェーズ開始時に保存（思考場面の維持）
@@ -1025,13 +1034,11 @@ export class UIController {
      * 会議確定
      */
     onConfirmMeeting() {
-        // 削除可能枚数チェック
+        // Spec1修正: 最大枚数未満の場合は確認ダイアログを表示
         const config = this.turnManager.getCurrentTurnConfig();
-        if (this.selectedCardsForDeletion.length < config.delete) {
+        if (config.delete > 0 && this.selectedCardsForDeletion.length < config.delete) {
             const confirmed = confirm('まだ削除できる枚数が残っています。次のターンに進んでよろしいですか？');
-            if (!confirmed) {
-                return;
-            }
+            if (!confirmed) return;
         }
 
         // カード削除
@@ -1082,6 +1089,9 @@ export class UIController {
 
         container.innerHTML = '';
         this.selectedTrainingCard = null;
+        // Spec2修正: 1枚選択するまで確定ボタンを無効化
+        const confirmBtnTraining = document.getElementById('confirm-training');
+        if (confirmBtnTraining) confirmBtnTraining.disabled = true;
 
         trainingCards.forEach(card => {
             const cardElem = this.createCardElement(card, {
@@ -1159,10 +1169,14 @@ export class UIController {
      * 結果フェーズ表示
      */
     showResultPhase() {
-        // 最終ターンのカード情報を保存（結果画面表示用）
+        // Bug1修正: 最終ターンのカード情報を保存（deck + hand + placed を含める）
+        const placedCards = Object.values(this.gameState.player.placed)
+            .filter(c => c !== null)
+            .map(c => ({ ...c }));
         const finalDeck = [
             ...this.gameState.player.deck.map(c => ({ ...c })),
-            ...this.gameState.player.hand.map(c => ({ ...c }))
+            ...this.gameState.player.hand.map(c => ({ ...c })),
+            ...placedCards
         ];
 
         const score = this.scoreManager.calculateScore(this.gameState);
