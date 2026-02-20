@@ -1391,3 +1391,61 @@ body {
 .btn-danger:active {
     transform: scale(0.98);
 }
+
+/* ==================== 文字サイズ切り替え ==================== */
+
+/* 標準モード: 25%拡大（remはhtml要素のfont-sizeに基づくためhtmlに適用） */
+html.font-normal {
+    font-size: 125%;
+}
+
+/* コンパクトヘッダー改行対応 */
+html.font-normal .sticky-header {
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+}
+
+/* 4ステータスのまとまりを維持 */
+html.font-normal .compact-stats {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+/* 標準モードで長押しヘルプ非表示 */
+html.font-normal .help-longpress {
+    display: none;
+}
+
+/* 文字サイズトグルスイッチ */
+.font-toggle {
+    display: flex;
+    background: var(--color-bg);
+    border-radius: var(--border-radius);
+    overflow: hidden;
+    border: 1px solid var(--color-border);
+}
+
+.font-toggle-option {
+    flex: 1;
+    padding: var(--spacing-sm) var(--spacing-md);
+    text-align: center;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+    color: var(--color-text-secondary);
+    border: none;
+    background: transparent;
+    font-weight: 500;
+}
+
+.font-toggle-option.active {
+    background: var(--color-primary);
+    color: var(--color-text);
+    font-weight: bold;
+}
+
+.font-toggle-note {
+    font-size: 0.8rem;
+    color: var(--color-text-secondary);
+    margin-top: var(--spacing-xs);
+}
