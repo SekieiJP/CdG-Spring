@@ -22,6 +22,9 @@ export class UIController {
         this.updateStatusDisplay();
         this.updateTurnDisplay();
 
+        // 文字サイズモードを適用
+        this.applyFontMode();
+
         // イベントリスナー設定
         this.setupEventListeners();
 
@@ -94,6 +97,33 @@ export class UIController {
             const btn = document.getElementById(id);
             btn?.addEventListener('click', () => this.showSettingsOverlay());
         });
+    }
+
+    /**
+     * 現在の文字サイズモードが「標準」かどうか
+     */
+    isNormalMode() {
+        return (localStorage.getItem('cdg_font_mode') || 'normal') === 'normal';
+    }
+
+    /**
+     * 文字サイズモードをbodyに適用
+     */
+    applyFontMode() {
+        if (this.isNormalMode()) {
+            document.documentElement.classList.add('font-normal');
+        } else {
+            document.documentElement.classList.remove('font-normal');
+        }
+    }
+
+    /**
+     * 文字サイズモードを設定
+     * @param {string} mode - 'normal' または 'small'
+     */
+    setFontMode(mode) {
+        localStorage.setItem('cdg_font_mode', mode);
+        this.applyFontMode();
     }
 
     /**
@@ -210,8 +240,10 @@ export class UIController {
         const isRecommended = options.recommendedCategory && card.category === options.recommendedCategory;
         const recommendedMark = isRecommended ? '🎯' : '';
 
-        // 表示する効果テキスト（compactモードではtopEffect、通常はeffect）
-        const displayEffect = options.compact && card.topEffect ? card.topEffect : card.effect;
+        // 表示する効果テキスト
+        // 標準モードではcompactでもフル表示（topEffect不使用）
+        const useCompact = options.compact && !this.isNormalMode();
+        const displayEffect = useCompact && card.topEffect ? card.topEffect : card.effect;
 
         cardDiv.innerHTML = `
             <div class="card-header">
@@ -224,8 +256,8 @@ export class UIController {
             <div class="card-effect">${displayEffect}</div>
         `;
 
-        // 長押しで詳細効果を表示（compactモード時のみ）
-        if (options.compact && card.topEffect && card.effect !== card.topEffect) {
+        // 長押しで詳細効果を表示（compactモード時のみ、標準モードでは無効）
+        if (!this.isNormalMode() && options.compact && card.topEffect && card.effect !== card.topEffect) {
             let pressTimer;
             cardDiv.addEventListener('touchstart', (e) => {
                 pressTimer = setTimeout(() => {
@@ -337,10 +369,11 @@ export class UIController {
 
         const instruction = document.querySelector('#training-area .instruction');
         if (instruction) {
+            const helpText = this.isNormalMode() ? '' : '<span class="help-longpress">[長押しで詳細]</span>';
             if (this.gameState.turn === 0) {
-                instruction.textContent = '初回研修: 4枚から2枚を選んで習得してください[長押しで詳細]';
+                instruction.innerHTML = `初回研修: 4枚から2枚を選んで習得してください${helpText}`;
             } else {
-                instruction.textContent = '研修: 3枚から1枚を選んで習得してください[長押しで詳細]';
+                instruction.innerHTML = `研修: 3枚から1枚を選んで習得してください${helpText}`;
             }
         }
     }
@@ -1107,7 +1140,8 @@ export class UIController {
 
         const instruction = document.querySelector('#training-area .instruction');
         if (instruction) {
-            instruction.textContent = '3枚から1枚を選んで習得してください';
+            const helpText = this.isNormalMode() ? '' : '<span class="help-longpress">[長押しで詳細]</span>';
+            instruction.innerHTML = `3枚から1枚を選んで習得してください${helpText}`;
         }
     }
 
@@ -1582,6 +1616,7 @@ export class UIController {
         const content = overlay.querySelector('.info-overlay-content');
 
         const buildVersion = window.BUILD_VERSION || 'unknown';
+        const currentFontMode = localStorage.getItem('cdg_font_mode') || 'normal';
 
         // バッジ表示判定
         const showTutorialBadge = !localStorage.getItem('cdg_visited');
@@ -1589,6 +1624,14 @@ export class UIController {
 
         content.innerHTML = `
             <div class="settings-content">
+                <div class="settings-section">
+                    <h3>文字サイズ</h3>
+                    <div class="font-toggle">
+                        <button class="font-toggle-option${currentFontMode === 'small' ? ' active' : ''}" data-mode="small">小さめ</button>
+                        <button class="font-toggle-option${currentFontMode === 'normal' ? ' active' : ''}" data-mode="normal">標準</button>
+                    </div>
+                    <p class="font-toggle-note">変更した文字サイズは次回再読み込み時に適用されます</p>
+                </div>
                 <div class="settings-section">
                     <h3>リンク</h3>
                     <div class="settings-links">
@@ -1632,6 +1675,16 @@ export class UIController {
             if (confirm('本当にはじめからやり直しますか？\n\n現在の進行状況はすべて失われます。')) {
                 this.resetGame();
             }
+        });
+
+        // 文字サイズトグルのイベント
+        content.querySelectorAll('.font-toggle-option').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.setFontMode(btn.dataset.mode);
+                // トグルUI更新
+                content.querySelectorAll('.font-toggle-option').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+            });
         });
 
         document.body.appendChild(overlay);
