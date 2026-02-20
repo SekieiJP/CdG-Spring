@@ -10,7 +10,7 @@ import { ScoreManager } from './scoreManager.js?v=20260219-0141';
 import { UIController } from './uiController.js?v=20260219-0141';
 import { SaveManager } from './saveManager.js?v=20260219-0141';
 
-const CACHE_BUSTER = 'v20260215-1430';
+const CACHE_BUSTER = 'v20260219-0141';
 
 // ビルドバージョンをグローバルに公開
 window.BUILD_VERSION = CACHE_BUSTER;
