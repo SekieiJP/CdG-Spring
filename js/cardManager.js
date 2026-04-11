@@ -18,9 +18,12 @@ export class CardManager {
      */
     async loadCards(csvPath) {
         try {
-            const response = await fetch(csvPath);
+            const cb = (typeof window !== 'undefined' && window.BUILD_VERSION) ? '?v=' + window.BUILD_VERSION : '';
+            const response = await fetch(csvPath + cb);
             const csvText = await response.text();
 
+            // 難易度切替時の混在防止
+            this.allCards = [];
             this.parseCSV(csvText);
             this.logger?.log(`カードデータ読み込み完了: ${this.allCards.length}枚`, 'info');
 
@@ -103,19 +106,13 @@ export class CardManager {
     }
 
     /**
-     * 基本カード（N）を取得（各2枚ずつ）
+     * 基本カード（N）を取得
      */
     getBasicCards() {
-        const basicCards = [];
-        const nCards = this.allCards.filter(c => c.rarity === 'N');
-
-        // 各基本カードを2枚ずつ
-        nCards.forEach(card => {
-            basicCards.push({ ...card });
-            basicCards.push({ ...card });
-        });
-
-        return basicCards;
+        // CSV上のNレアリティカードをそのまま返す（複製しない）
+        return this.allCards
+            .filter(c => c.rarity === 'N')
+            .map(card => ({ ...card }));
     }
 
     /**
@@ -124,6 +121,7 @@ export class CardManager {
      */
     initTrainingPool() {
         this.trainingDecks = { N: [], R: [], SR: [], SSR: [] };
+        this.trainingDiscards = { R: [], SR: [], SSR: [] };
 
         this.allCards.forEach(card => {
             if (this.trainingDecks[card.rarity]) {
@@ -164,7 +162,22 @@ export class CardManager {
             return [];
         }
 
-        const deck = this.trainingDecks[rarity];
+        if (!this.trainingDiscards) {
+            this.trainingDiscards = { R: [], SR: [], SSR: [] };
+        }
+        if (!this.trainingDiscards[rarity]) {
+            this.trainingDiscards[rarity] = [];
+        }
+
+        let deck = this.trainingDecks[rarity];
+        if (deck.length === 0 && this.trainingDiscards[rarity].length > 0) {
+            this.trainingDecks[rarity] = [...this.trainingDiscards[rarity]];
+            this.trainingDiscards[rarity] = [];
+            this.shuffleTrainingDeck(rarity);
+            this.logger?.log(`${rarity}研修デッキを再構成しました`, 'info');
+            deck = this.trainingDecks[rarity];
+        }
+
         const drawn = [];
         const usedNames = new Set();
 
@@ -177,6 +190,7 @@ export class CardManager {
                 const idx = deck.findIndex(c => c.cardName === cardName);
                 if (idx !== -1) {
                     const card = deck.splice(idx, 1)[0];
+                    this.trainingDiscards[rarity].push(card);
                     drawn.push({ ...card });
                     usedNames.add(cardName);
                     this.logger?.log(`[DEBUG] 研修カード優先引き: ${cardName}`, 'info');
@@ -193,16 +207,32 @@ export class CardManager {
 
         // 残りの枚数をプールから異なるカード名で引く
         // プール内のユニークなカード名を収集してシャッフル
-        const availableNames = [...new Set(deck.map(c => c.cardName))]
+        let availableNames = [...new Set(deck.map(c => c.cardName))]
             .filter(name => !usedNames.has(name));
 
         // シャッフル（Fisher-Yates）
-        for (let i = availableNames.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [availableNames[i], availableNames[j]] = [availableNames[j], availableNames[i]];
-        }
+        const shuffleNames = () => {
+            for (let i = availableNames.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [availableNames[i], availableNames[j]] = [availableNames[j], availableNames[i]];
+            }
+        };
+        shuffleNames();
 
         for (let i = drawn.length; i < count; i++) {
+            if (availableNames.length === 0) {
+                if (deck.length === 0 && this.trainingDiscards[rarity].length > 0) {
+                    this.trainingDecks[rarity] = [...this.trainingDiscards[rarity]];
+                    this.trainingDiscards[rarity] = [];
+                    this.shuffleTrainingDeck(rarity);
+                    this.logger?.log(`${rarity}研修デッキを再構成しました`, 'info');
+                    deck = this.trainingDecks[rarity];
+                    availableNames = [...new Set(deck.map(c => c.cardName))]
+                        .filter(name => !usedNames.has(name));
+                    shuffleNames();
+                }
+            }
+
             if (availableNames.length === 0) {
                 this.logger?.log(`研修候補プールの${rarity}カードが不足しています`, 'info');
                 break;
@@ -212,12 +242,47 @@ export class CardManager {
             const idx = deck.findIndex(c => c.cardName === name);
             if (idx !== -1) {
                 const card = deck.splice(idx, 1)[0];
+                this.trainingDiscards[rarity].push(card);
                 drawn.push({ ...card });
             }
         }
 
         this.logger?.log(`研修カード提示: ${drawn.map(c => c.cardName).join(', ')} (${rarity}プール残: ${deck.length}枚)`, 'info');
         return drawn;
+    }
+
+    /**
+     * 研修リフレッシュ: 現在の候補カードをゲームから除外し、新しい候補を抽選
+     * @param {string} rarity - レアリティ ('R', 'SR', 'SSR')
+     * @param {Array} currentCards - 現在表示中の候補カード（ゲームから永久除外）
+     * @param {number} count - 新たに抽選する枚数
+     * @returns {Array} 新しい候補カード
+     */
+    refreshTrainingCards(rarity, currentCards, count) {
+        // リロード復元後に trainingDiscards が未初期化の場合を吸収
+        if (!this.trainingDiscards) {
+            this.trainingDiscards = { R: [], SR: [], SSR: [] };
+        }
+        if (!this.trainingDiscards[rarity]) {
+            this.trainingDiscards[rarity] = [];
+        }
+
+        // 現在の候補カードをゲームから永久除外（捨て札にも戻さない）
+        currentCards.forEach(card => {
+            const idx = this.trainingDecks[rarity]?.findIndex(c => c === card);
+            if (idx > -1) {
+                this.trainingDecks[rarity].splice(idx, 1);
+            }
+            const discardIdx = this.trainingDiscards[rarity]?.findIndex(c => c === card);
+            if (discardIdx > -1) {
+                this.trainingDiscards[rarity].splice(discardIdx, 1);
+            }
+        });
+
+        this.logger?.log(`研修リフレッシュ: カード${currentCards.length}枚を除外し、新たに${count}枚を抽選`, 'action');
+
+        // 新しい候補を抽選（既存のdrawTrainingCardsを利用）
+        return this.drawTrainingCards(rarity, count);
     }
 
     /**
@@ -326,6 +391,18 @@ export class CardManager {
             };
         }
 
+        // 2ステータスの差条件（例: 体験と入塾の差が5以下）
+        const diffMatch = conditionText.match(/(体験|入塾|満足|経理)と(体験|入塾|満足|経理)の差が(\d+)(以上|以下)/);
+        if (diffMatch) {
+            return {
+                type: 'statDiff',
+                stat1: statusMap[diffMatch[1]],
+                stat2: statusMap[diffMatch[2]],
+                value: parseInt(diffMatch[3]),
+                comparison: diffMatch[4] === '以上' ? 'gte' : 'lte'
+            };
+        }
+
         // 不明な条件
         return { type: 'unknown', raw: conditionText };
     }
@@ -361,6 +438,26 @@ export class CardManager {
             });
         }
 
+        // トークン効果キーワード（各1回の出現 = トークン+1）
+        const tokenKeywords = {
+            '情熱': 'passion',
+            '発想': 'inspiration',
+            '整理': 'organize',
+            '疲労': 'fatigue',
+        };
+        for (const [keyword, token] of Object.entries(tokenKeywords)) {
+            const regex = new RegExp(keyword, 'g');
+            const count = (effectText.match(regex) || []).length;
+            for (let i = 0; i < count; i++) {
+                effects.push({ type: 'token', token });
+            }
+        }
+
+        // 並行効果
+        if (effectText.includes('並行')) {
+            effects.push({ type: 'immediate', effect: 'parallel' });
+        }
+
         return effects;
     }
 
@@ -379,6 +476,13 @@ export class CardManager {
             } else {
                 return currentValue <= condition.value;
             }
+        }
+
+        if (condition.type === 'statDiff') {
+            const v1 = gameState.player[condition.stat1] ?? 0;
+            const v2 = gameState.player[condition.stat2] ?? 0;
+            const diff = Math.abs(v1 - v2);
+            return condition.comparison === 'gte' ? diff >= condition.value : diff <= condition.value;
         }
 
         // 不明な条件は適用しない
@@ -411,8 +515,14 @@ export class CardManager {
         });
 
         // 条件付き効果を評価・適用
+        const statsSnapshot = {
+            experience: gameState.player.experience,
+            enrollment: gameState.player.enrollment,
+            satisfaction: gameState.player.satisfaction,
+            accounting: gameState.player.accounting
+        };
         parsed.conditionalBlocks.forEach(block => {
-            if (this.evaluateCondition(block.condition, staff, gameState)) {
+            if (this.evaluateCondition(block.condition, staff, { player: statsSnapshot })) {
                 const conditionName = this.getConditionName(block.condition);
                 this.logger?.log(`  条件成立: ${conditionName}`, 'info');
                 block.effects.forEach(effect => {
@@ -435,16 +545,28 @@ export class CardManager {
             accounting: '経理'
         };
 
+        if (!gameState.tokens) {
+            gameState.tokens = { passion: 0, inspiration: 0, organize: 0, fatigue: 0 };
+        }
+
         if (effect.type === 'set') {
             const before = gameState.player[effect.status];
             gameState.player[effect.status] = effect.value;
             this.logger?.log(`  ${statusNames[effect.status]}: ${before} → ${effect.value}`, 'status');
         } else if (effect.type === 'change') {
-            const before = gameState.player[effect.status];
             gameState.updateStatus(effect.status, effect.value);
-            const after = gameState.player[effect.status];
-            const sign = effect.value > 0 ? '+' : '';
-            this.logger?.log(`  ${statusNames[effect.status]}: ${before} → ${after} (${sign}${effect.value})`, 'status');
+        } else if (effect.type === 'token') {
+            gameState.tokens[effect.token] = (gameState.tokens[effect.token] || 0) + 1;
+            const tokenNames = {
+                passion: '✊情熱',
+                inspiration: '💡発想',
+                organize: '🗑️整理',
+                fatigue: '💤疲労'
+            };
+            this.logger?.log(`  ${tokenNames[effect.token]}トークン獲得 (計${gameState.tokens[effect.token]})`, 'action');
+        } else if (effect.type === 'immediate' && effect.effect === 'parallel') {
+            // 並行は配置時判定のため applyCardEffect ではログのみ
+            this.logger?.log('  🤹並行: 重ね配置可能', 'info');
         }
     }
 
@@ -465,6 +587,16 @@ export class CardManager {
             };
             const comp = condition.comparison === 'gte' ? '以上' : '以下';
             return `${statusNames[condition.status]}${condition.value}${comp}`;
+        }
+        if (condition.type === 'statDiff') {
+            const statNames = {
+                experience: '体験',
+                enrollment: '入塾',
+                satisfaction: '満足',
+                accounting: '経理'
+            };
+            const compText = condition.comparison === 'gte' ? '以上' : '以下';
+            return `${statNames[condition.stat1] || condition.stat1}と${statNames[condition.stat2] || condition.stat2}の差が${condition.value}${compText}`;
         }
         return condition.raw || '不明';
     }

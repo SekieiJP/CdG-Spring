@@ -1,7 +1,19 @@
+import { submitScore } from './scoreSubmitter.js?v=20260411-0900';
+
 /**
  * UIController - UI操作・表示制御
  */
 export class UIController {
+    _escapeHTML(str) {
+        if (typeof str !== 'string') return str;
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     constructor(gameState, cardManager, turnManager, scoreManager, logger, saveManager) {
         this.gameState = gameState;
         this.cardManager = cardManager;
@@ -12,7 +24,11 @@ export class UIController {
 
         this.selectedTrainingCard = null;
         this.selectedCardsForDeletion = [];
+        this.slotSelectionMode = false;       // スロット手動指定モード
+        this.selectedCardForPlacement = null; // 手動指定時に選択中のカード
         this.tapMode = true; // タップ順配置モード
+        this.trainingSelectionMode = 'normal'; // 'normal' | 'inspiration'
+        this.inspirationRemaining = 0;
     }
 
     /**
@@ -24,6 +40,7 @@ export class UIController {
 
         // 文字サイズモードを適用
         this.applyFontMode();
+        this.applyCardDesc();
 
         // イベントリスナー設定
         this.setupEventListeners();
@@ -60,13 +77,29 @@ export class UIController {
         const startBtn = document.getElementById('start-game');
         startBtn?.addEventListener('click', () => this.onStartGame());
 
+        // 難易度選択ボタン
+        document.querySelectorAll('.difficulty-btn').forEach(btn => {
+            btn.addEventListener('click', () => this.onDifficultySelect(btn.dataset.difficulty));
+        });
+
+        // 初訪問者向けFRESH吹き出し表示
+        const visited = localStorage.getItem('cdg_visited');
+        if (!visited) {
+            const tooltip = document.getElementById('fresh-tooltip');
+            if (tooltip) tooltip.classList.remove('hidden');
+        }
+
         // 研修確定ボタン
         const confirmTrainingBtn = document.getElementById('confirm-training');
         confirmTrainingBtn?.addEventListener('click', () => this.onConfirmTraining());
+        const refreshTrainingBtn = document.getElementById('btn-training-refresh');
+        refreshTrainingBtn?.addEventListener('click', () => this.onTrainingRefresh());
 
         // アクション実行ボタン
         const confirmActionBtn = document.getElementById('confirm-action');
         confirmActionBtn?.addEventListener('click', () => this.onConfirmAction());
+        const btnSlotManual = document.getElementById('btn-slot-manual');
+        btnSlotManual?.addEventListener('click', () => this.toggleSlotSelectionMode());
 
         // 会議確定ボタン
         const confirmMeetingBtn = document.getElementById('confirm-meeting');
@@ -100,10 +133,40 @@ export class UIController {
     }
 
     /**
+     * 難易度選択
+     * @param {string} difficultyId - 'fresh' or 'pro'
+     */
+    onDifficultySelect(difficultyId) {
+        this.selectedDifficulty = difficultyId;
+
+        // ボタンのselectedクラスを切り替え
+        document.querySelectorAll('.difficulty-btn').forEach(btn => {
+            btn.classList.toggle('selected', btn.dataset.difficulty === difficultyId);
+        });
+    }
+
+    /**
      * 現在の文字サイズモードが「標準」かどうか
      */
     isNormalMode() {
         return (localStorage.getItem('cdg_font_mode') || 'normal') === 'normal';
+    }
+
+    isShortCardDesc() {
+        return localStorage.getItem('cdg_card_desc') === 'short';
+    }
+
+    setCardDesc(mode) {
+        localStorage.setItem('cdg_card_desc', mode);
+        this.applyCardDesc();
+    }
+
+    applyCardDesc() {
+        if (this.isShortCardDesc()) {
+            document.documentElement.classList.add('card-desc-short');
+        } else {
+            document.documentElement.classList.remove('card-desc-short');
+        }
     }
 
     /**
@@ -141,6 +204,56 @@ export class UIController {
             const compactElem = document.getElementById(`compact-${status}`);
             if (compactElem) {
                 compactElem.textContent = this.gameState.player[status];
+            }
+        });
+
+        // ランク表示更新
+        this.updateRankDisplay();
+    }
+
+    /**
+     * ステータスランク表示を更新
+     */
+    updateRankDisplay() {
+        if (!this.scoreManager?.rankTable) return;
+
+        const difficulty = this.gameState.difficulty || 'fresh';
+        const statuses = ['experience', 'enrollment', 'satisfaction', 'accounting'];
+
+        statuses.forEach(stat => {
+            const value = this.gameState.player[stat];
+            const rankInfo = this.scoreManager.getStatusRank(stat, value, difficulty);
+            if (!rankInfo) return;
+
+            const container = document.getElementById(`rank-info-${stat}`);
+            if (!container) return;
+
+            // ランクラベル（全4ステータス共通で表示）
+            const labelElem = container.querySelector('.rank-label');
+            if (labelElem) {
+                labelElem.textContent = rankInfo.grade;
+            }
+
+            // プログレスバー
+            const fillElem = container.querySelector('.rank-progress-fill');
+            if (fillElem) {
+                const range = rankInfo.nextThreshold - rankInfo.startThreshold;
+                const progress = range > 0
+                    ? Math.min(((value - rankInfo.startThreshold) / range) * 100, 100)
+                    : 100;
+                fillElem.style.width = `${progress}%`;
+            }
+
+            // あとN表示（「Xまであと Y」形式）
+            const deficitElem = container.querySelector('.rank-deficit');
+            if (deficitElem) {
+                if (rankInfo.deficit > 0) {
+                    deficitElem.textContent = `${rankInfo.targetGrade}まであと${rankInfo.deficit}`;
+                    deficitElem.classList.remove('hidden');
+                } else {
+                    deficitElem.textContent = '';
+                    deficitElem.classList.add('hidden');
+                }
             }
         });
     }
@@ -234,30 +347,30 @@ export class UIController {
         }
 
         // カテゴリ色クラス
-        const categoryClass = `category-${card.category}`;
+        const categoryClass = `category-${this._escapeHTML(card.category)}`;
 
         // おすすめ行動合致チェック
         const isRecommended = options.recommendedCategory && card.category === options.recommendedCategory;
         const recommendedMark = isRecommended ? '🎯' : '';
 
         // 表示する効果テキスト
-        // 標準モードではcompactでもフル表示（topEffect不使用）
-        const useCompact = options.compact && !this.isNormalMode();
+        // カード説明設定が短縮時のみcompactでtopEffectを使用
+        const useCompact = options.compact && this.isShortCardDesc();
         const displayEffect = useCompact && card.topEffect ? card.topEffect : card.effect;
 
         cardDiv.innerHTML = `
             <div class="card-header">
-                <span class="card-name">${card.cardName}</span>
+                <span class="card-name">${this._escapeHTML(card.cardName)}</span>
             </div>
             <div class="card-meta">
-                <span class="card-category-text ${categoryClass}">${card.category}</span>${recommendedMark}
+                <span class="card-category-text ${categoryClass}">${this._escapeHTML(card.category)}</span>${recommendedMark}
                 <span class="card-rarity rarity-${card.rarity}">${card.rarity}</span>
             </div>
-            <div class="card-effect">${displayEffect}</div>
+            <div class="card-effect">${this._escapeHTML(displayEffect)}</div>
         `;
 
-        // 長押しで詳細効果を表示（compactモード時のみ、標準モードでは無効）
-        if (!this.isNormalMode() && options.compact && card.topEffect && card.effect !== card.topEffect) {
+        // 長押しで詳細効果を表示（短縮表示時のみ）
+        if (this.isShortCardDesc() && options.compact && card.topEffect && card.effect !== card.topEffect) {
             let pressTimer;
             cardDiv.addEventListener('touchstart', (e) => {
                 pressTimer = setTimeout(() => {
@@ -282,8 +395,8 @@ export class UIController {
         const tooltip = document.createElement('div');
         tooltip.className = 'effect-tooltip';
         tooltip.innerHTML = `
-            <div class="tooltip-title">${card.cardName}</div>
-            <div class="tooltip-effect">${card.effect}</div>
+            <div class="tooltip-title">${this._escapeHTML(card.cardName)}</div>
+            <div class="tooltip-effect">${this._escapeHTML(card.effect)}</div>
             <div class="tooltip-close">タップで閉じる</div>
         `;
         tooltip.addEventListener('click', () => tooltip.remove());
@@ -293,11 +406,35 @@ export class UIController {
     /**
      * ゲーム開始
      */
-    onStartGame() {
+    async onStartGame() {
+        const difficulty = this.selectedDifficulty || 'fresh';
+
+        // 難易度に応じたCSVを読み込み
+        if (window.game) {
+            const success = await window.game.setDifficulty(difficulty);
+            if (!success) {
+                // CSVが見つからない場合（PRO準備中など）
+                alert(`${difficulty.toUpperCase()}難易度は現在準備中です。\nFRESH難易度でお楽しみください。`);
+                // FRESHにフォールバック
+                this.onDifficultySelect('fresh');
+                await window.game.setDifficulty('fresh');
+                return;
+            }
+        }
+
         const overlay = document.getElementById('start-overlay');
         overlay?.classList.add('hidden');
 
+        this.gameState.difficulty = difficulty;
         this.turnManager.initializeGame();
+        this.gameState.recordStartTime(); // initializeGame()のreset()より後に記録
+        this.slotSelectionMode = false;
+        this.selectedCardForPlacement = null;
+        const btnSlotManual = document.getElementById('btn-slot-manual');
+        if (btnSlotManual) {
+            btnSlotManual.classList.remove('active');
+            btnSlotManual.title = 'スロット手動指定: OFF（タップで自動配置）';
+        }
 
         // Bug2修正: リスタート時もステータス表示をリセット
         this.updateStatusDisplay();
@@ -311,13 +448,13 @@ export class UIController {
      * 初回研修表示
      */
     showInitialTraining() {
-        console.log('[SAVE-DEBUG] showInitialTraining: 開始');
+        window.CDG_DEBUG && console.log('[SAVE-DEBUG] showInitialTraining: 開始');
 
         // フェーズを設定（保存前に必要）
         this.gameState.phase = 'training';
 
         const trainingCards = this.cardManager.drawTrainingCards('R', 4);
-        console.log('[SAVE-DEBUG] showInitialTraining: 抽選カード:', trainingCards.map(c => c.cardName));
+        window.CDG_DEBUG && console.log('[SAVE-DEBUG] showInitialTraining: 抽選カード:', trainingCards.map(c => c.cardName));
 
         // 抽選したカードをgameStateに保存（復元時に使用）
         this.gameState.currentTrainingCards = trainingCards.map(c => ({ ...c }));
@@ -366,16 +503,22 @@ export class UIController {
 
         this.showPhaseArea('training');
         this.updateTurnDisplay();
+        this.updateStatusDisplay();
+        this.renderTokenDisplay();
 
         const instruction = document.querySelector('#training-area .instruction');
         if (instruction) {
-            const helpText = this.isNormalMode() ? '' : '<span class="help-longpress">[長押しで詳細]</span>';
+            const helpText = this.isShortCardDesc() ? '<span class="help-longpress">[長押しで詳細]</span>' : '';
             if (this.gameState.turn === 0) {
                 instruction.innerHTML = `初回研修: 4枚から2枚を選んで習得してください${helpText}`;
             } else {
                 instruction.innerHTML = `研修: 3枚から1枚を選んで習得してください${helpText}`;
             }
         }
+
+        // リフレッシュボタン表示更新（初回研修含む）
+        const rarity = this.gameState.turn === 0 ? 'R' : this.turnManager.getCurrentTurnConfig()?.training;
+        this.updateTrainingRefreshUI(rarity);
     }
 
     /**
@@ -407,7 +550,13 @@ export class UIController {
      * 研修確定
      */
     onConfirmTraining() {
-        console.log('[SAVE-DEBUG] onConfirmTraining: 開始, turn=', this.gameState.turn);
+        window.CDG_DEBUG && console.log('[SAVE-DEBUG] onConfirmTraining: 開始, turn=', this.gameState.turn);
+
+        // 発想追加習得モードの確定処理
+        if (this.trainingSelectionMode === 'inspiration') {
+            this.confirmInspirationTraining();
+            return;
+        }
 
         if (this.gameState.turn === 0 && this.selectedInitialCards) {
             // 初回研修
@@ -420,21 +569,19 @@ export class UIController {
                 this.gameState.addToDeck(this.selectedTrainingCard);
                 this.selectedTrainingCard = null;
             }
+
+            // 発想トークンがあれば追加習得フローへ
+            const inspiration = this.gameState.tokens?.inspiration ?? 0;
+            if (inspiration > 0) {
+                this.startInspirationTrainingFlow();
+                return;
+            }
         }
 
         // 研修カードをクリア（選択済み）
         this.gameState.currentTrainingCards = null;
 
-        // フェーズをtrainingに設定してからadvancePhaseを呼ぶ
-        // これによりadvancePhaseがtraining→actionへ正しく遷移する
-        this.gameState.phase = 'training';
-
-        this.turnManager.advancePhase();
-        this.showActionPhase();
-
-        // 手札ドロー完了直後に保存（再抽選防止）
-        console.log('[SAVE-DEBUG] onConfirmTraining: 手札ドロー完了, hand=', this.gameState.player.hand.map(c => c.cardName));
-        this.saveGameState();
+        this.finalizeTrainingToAction();
     }
 
     /**
@@ -451,14 +598,91 @@ export class UIController {
         // 配置済み状態もクリア
         this.gameState.clearPlaced();
 
+        // ドロー変動通知を表示
+        this.renderDrawNotification();
+
+        // トークン表示更新
+        this.renderTokenDisplay();
+
+        // ターンをまたいだ選択残りをクリア
+        this.selectedCardForPlacement = null;
+
         // 手札表示
         this.renderHand();
+
+        // スロット指定ボタンの状態を反映
+        const btnSlotManual = document.getElementById('btn-slot-manual');
+        if (btnSlotManual) {
+            btnSlotManual.classList.toggle('active', this.slotSelectionMode);
+            btnSlotManual.title = this.slotSelectionMode
+                ? 'スロット手動指定: ON（カードを選んでからスロットをタップ）'
+                : 'スロット手動指定: OFF（タップで自動配置）';
+        }
+        this.selectedCardForPlacement = null; // 念のため再クリア
 
         // スタッフスロットにドロップイベント設定
         this.setupDropZones();
 
         // ボタン状態を更新
         this.updateActionButtonState();
+    }
+
+    /**
+     * ドロー変動通知を表示
+     */
+    renderDrawNotification() {
+        const container = document.getElementById('draw-notification');
+        if (!container) return;
+
+        const notif = this.gameState.lastDrawNotification;
+        if (!notif) {
+            container.innerHTML = '';
+            container.classList.add('hidden');
+            this.gameState.lastDrawNotification = null;
+            return;
+        }
+
+        const parts = [];
+        if (notif.passion > 0) parts.push(`✊情熱 +${notif.passion}`);
+        if (notif.fatigue > 0) parts.push(`💤疲労 -${notif.fatigue}`);
+
+        container.innerHTML = `<span class="draw-notif-text">${parts.join(' / ')} → ${notif.drawCount}枚ドロー</span>`;
+        container.classList.remove('hidden');
+        this.gameState.lastDrawNotification = null;
+    }
+
+    /**
+     * アクションフェーズのトークンチップ表示を更新する
+     * 保有数が0より大きいトークンのみ表示する
+     */
+    renderTokenDisplay() {
+        const containers = ['token-display', 'token-status-display']
+            .map(id => document.getElementById(id))
+            .filter(Boolean);
+        if (containers.length === 0) return;
+
+        const tokens = this.gameState.tokens ?? {};
+        const tokenDefs = [
+            { key: 'passion',     label: '情熱✊',  cls: 'token-passion'     },
+            { key: 'inspiration', label: '発想💡',  cls: 'token-inspiration' },
+            { key: 'organize',    label: '整理🗑️', cls: 'token-organize'    },
+            { key: 'fatigue',     label: '疲労💤',  cls: 'token-fatigue'     },
+        ];
+
+        const chips = tokenDefs
+            .filter(t => (tokens[t.key] ?? 0) > 0)
+            .map(t => `<span class="token-chip ${t.cls}">${t.label} ×${tokens[t.key]}</span>`)
+            .join('');
+
+        containers.forEach(container => {
+            if (chips) {
+                container.innerHTML = chips;
+                container.classList.remove('hidden');
+            } else {
+                container.innerHTML = '';
+                container.classList.add('hidden');
+            }
+        });
     }
 
     /**
@@ -496,6 +720,9 @@ export class UIController {
                 recommendedCategory: recommendedCategory,
                 onClick: (c) => this.onHandCardTap(c)
             });
+            if (this.slotSelectionMode && this.selectedCardForPlacement === card) {
+                cardElem.classList.add('selected-for-placement');
+            }
             handContainer.appendChild(cardElem);
         });
     }
@@ -504,15 +731,37 @@ export class UIController {
      * 手札カードタップ（タップ順配置）
      */
     onHandCardTap(card) {
-        const staffOrder = ['leader', 'teacher', 'staff'];
-
-        // 空いている最初のスロットに配置
-        for (const staff of staffOrder) {
-            if (!this.gameState.player.placed[staff]) {
-                this.tryPlaceCardToSlot(card, staff);
-                break;
+        if (this.slotSelectionMode) {
+            if (this.selectedCardForPlacement === card) {
+                // 同じカードを再タップ → 選択キャンセル
+                this.selectedCardForPlacement = null;
+            } else {
+                // 別のカードをタップ → 選択切り替え
+                this.selectedCardForPlacement = card;
             }
+            this.renderHand(); // ハイライト更新
+            return;
         }
+        // 自動配置モード（既存挙動）
+        const targetSlot = this.findBestSlot(card);
+        if (targetSlot !== null) {
+            this.tryPlaceCardToSlot(card, targetSlot);
+        }
+    }
+
+    toggleSlotSelectionMode() {
+        this.slotSelectionMode = !this.slotSelectionMode;
+        this.selectedCardForPlacement = null;
+
+        const btn = document.getElementById('btn-slot-manual');
+        if (btn) {
+            btn.classList.toggle('active', this.slotSelectionMode);
+            btn.title = this.slotSelectionMode
+                ? 'スロット手動指定: ON（カードを選んでからスロットをタップ）'
+                : 'スロット手動指定: OFF（タップで自動配置）';
+        }
+        // 選択中ハイライトを解除
+        this.renderHand();
     }
 
     /**
@@ -526,6 +775,12 @@ export class UIController {
         const allowedStaff = this.parseStaffRestriction(card.effect);
         if (allowedStaff && !allowedStaff.includes(currentStaffName)) {
             this.showFloatNotification(`このカードは ${allowedStaff.join('・')} 専用です`, 'error');
+            return;
+        }
+
+        // 並行効果を持たないカードは埋まったスロットに配置できない
+        if (!this.hasParallelEffect(card) && this.gameState.player.placed[staff].length > 0) {
+            this.showFloatNotification('このカードは重ね配置できません', 'error');
             return;
         }
 
@@ -562,6 +817,41 @@ export class UIController {
             }
         }
         return null;
+    }
+
+    /**
+     * カードが並行効果を持つか判定
+     */
+    hasParallelEffect(card) {
+        return !!(card.effect && card.effect.includes('並行'));
+    }
+
+    /**
+     * 最適な配置スロットを探索
+     * - 並行カード: 配置枚数が最少のスロット（同数なら室長>講師>事務）
+     * - 非並行カード: 空きスロットのみ（室長>講師>事務の優先順）
+     * - 職種制限【】も考慮
+     * @returns {string|null} 'leader'|'teacher'|'staff' または null（配置不可）
+     */
+    findBestSlot(card) {
+        const isParallel = this.hasParallelEffect(card);
+        const staffOrder = ['leader', 'teacher', 'staff'];
+        const staffNames = { leader: '室長', teacher: '講師', staff: '事務' };
+        const allowedStaff = this.parseStaffRestriction(card.effect);
+
+        let bestSlot = null;
+        let bestCount = Infinity;
+
+        for (const slotKey of staffOrder) {
+            if (allowedStaff && !allowedStaff.includes(staffNames[slotKey])) continue;
+            const count = this.gameState.player.placed[slotKey].length;
+            if (!isParallel && count > 0) continue; // 非並行は空きスロットのみ
+            if (count < bestCount) {
+                bestCount = count;
+                bestSlot = slotKey;
+            }
+        }
+        return bestSlot;
     }
 
     /**
@@ -642,37 +932,62 @@ export class UIController {
      * カードをスロットに配置
      */
     placeCardToSlot(card, staff) {
+        if (this.selectedCardForPlacement === card) {
+            this.selectedCardForPlacement = null;
+        }
         this.gameState.placeCard(card, staff);
         this.gameState.removeFromHand(card);
 
-        // UI更新
-        const slot = document.getElementById(`slot-${staff}`);
-        if (slot) {
-            slot.innerHTML = '';
-            const cardElem = this.createCardElement(card, {
-                clickable: true,
-                compact: true,
-                onClick: () => this.onPlacedCardClick(card, staff)
-            });
-            slot.appendChild(cardElem);
-            slot.classList.add('filled');
-        }
-
+        this.renderStaffSlot(staff);
         this.renderHand();
         this.updateActionButtonState();
+    }
+
+    /**
+     * スタッフスロットのUI再描画
+     */
+    renderStaffSlot(staff) {
+        const slot = document.getElementById(`slot-${staff}`);
+        if (!slot) return;
+        const cards = this.gameState.player.placed[staff];
+        slot.innerHTML = '';
+        if (cards.length === 0) {
+            slot.innerHTML = '<span class="slot-placeholder">タップまたはドラッグ</span>';
+            slot.classList.remove('filled');
+        } else {
+            cards.forEach(card => {
+                const cardElem = this.createCardElement(card, {
+                    clickable: true,
+                    compact: true,
+                    onClick: () => this.onPlacedCardClick(card, staff)
+                });
+                slot.appendChild(cardElem);
+            });
+            slot.classList.add('filled');
+        }
     }
 
     /**
      * 配置済みカードクリック（取り消し）
      */
     onPlacedCardClick(card, staff) {
-        this.gameState.player.placed[staff] = null;
+        // スロット指定モードでカード選択中の場合、slot.onclickに処理を任せる
+        if (this.slotSelectionMode && this.selectedCardForPlacement !== null) {
+            return;
+        }
+
+        this.gameState.removePlacedCard(card, staff);
         this.gameState.addToHand(card);
 
         const slot = document.getElementById(`slot-${staff}`);
         if (slot) {
-            slot.innerHTML = '<span class="slot-placeholder">タップまたはドラッグ</span>';
-            slot.classList.remove('filled');
+            if (this.gameState.player.placed[staff].length === 0) {
+                slot.innerHTML = '<span class="slot-placeholder">タップまたはドラッグ</span>';
+                slot.classList.remove('filled');
+            } else {
+                // まだカードが残っている場合はスロットを再描画
+                this.renderStaffSlot(staff);
+            }
         }
 
         this.renderHand();
@@ -689,23 +1004,34 @@ export class UIController {
             const slot = document.getElementById(`slot-${staff}`);
             if (!slot) return;
 
-            slot.addEventListener('dragover', (e) => {
+            // プロパティ代入で上書きし、累積登録を防ぐ
+            slot.ondragover = (e) => {
                 e.preventDefault();
                 slot.classList.add('drag-over');
-            });
+            };
 
-            slot.addEventListener('dragleave', () => {
+            slot.ondragleave = () => {
                 slot.classList.remove('drag-over');
-            });
+            };
 
-            slot.addEventListener('drop', (e) => {
+            slot.ondrop = (e) => {
                 e.preventDefault();
                 slot.classList.remove('drag-over');
 
-                if (this.draggedCard && !this.gameState.player.placed[staff]) {
-                    this.placeCardToSlot(this.draggedCard, staff);
+                if (this.draggedCard) {
+                    this.tryPlaceCardToSlot(this.draggedCard, staff);
                 }
-            });
+            };
+
+            slot.onclick = () => {
+                // 手動指定モードON かつ カード選択中 のときのみ処理
+                if (!this.slotSelectionMode || !this.selectedCardForPlacement) return;
+                // クリックが子要素（配置済みカード）由来でも親スロットのstaffを使う
+                const card = this.selectedCardForPlacement;
+                this.selectedCardForPlacement = null;
+                this.renderHand(); // ハイライト解除
+                this.tryPlaceCardToSlot(card, staff);
+            };
         });
     }
 
@@ -737,20 +1063,37 @@ export class UIController {
     }
 
     /**
+     * 手札の中で、現在配置可能なカード枚数を返す
+     * 並行カードは常に配置可能、非並行カードは空きスロットがある場合のみ
+     */
+    getPlaceableCardCountInHand() {
+        const staffMap = { leader: '室長', teacher: '講師', staff: '事務' };
+        return this.gameState.player.hand.filter(card => {
+            const isParallel = this.hasParallelEffect(card);
+            const allowedStaff = this.parseStaffRestriction(card.effect);
+            return ['leader', 'teacher', 'staff'].some(slotKey => {
+                if (allowedStaff && !allowedStaff.includes(staffMap[slotKey])) return false;
+                const count = this.gameState.player.placed[slotKey].length;
+                return isParallel || count === 0;
+            });
+        }).length;
+    }
+
+    /**
      * 全スタッフ配置済みチェック
      */
     isAllStaffPlaced() {
         const placed = this.gameState.player.placed;
-        return Object.values(placed).every(card => card !== null);
+        return Object.values(placed).every(cards => cards.length > 0);
     }
 
     /**
      * アクション実行
      */
     onConfirmAction() {
-        // 未配置スタッフがいる場合は警告
-        if (!this.isAllStaffPlaced()) {
-            const confirmed = confirm('カードが配置されていないスタッフがいます。教室行動を確定させてよろしいですか？');
+        const placeableCount = this.getPlaceableCardCountInHand();
+        if (placeableCount > 0) {
+            const confirmed = confirm(`まだ配置できるカードがあります（${placeableCount}枚）。このまま教室行動を確定しますか？`);
             if (!confirmed) {
                 return;
             }
@@ -782,124 +1125,237 @@ export class UIController {
     /**
      * ステータス変動演出を表示
      */
-    showStatusAnimation(beforeStats, afterStats, actionInfo) {
+    async showStatusAnimation(beforeStats, afterStats, actionInfo) {
         const overlay = document.getElementById('status-animation-overlay');
         const header = document.getElementById('animation-header');
         const cards = document.getElementById('animation-cards');
 
-        if (!overlay) {
+        if (!overlay || !header || !cards) {
             // 演出要素がなければスキップして次へ進む
             this.finishActionPhase();
             return;
         }
 
-        // 現在のステータス（リアルタイム更新用）
-        const currentStats = { ...beforeStats };
+        try {
+            // 現在のステータス（リアルタイム更新用）
+            const currentStats = { ...beforeStats };
 
-        // ステータス表示を初期化
-        this.updateAnimationStats(currentStats, {});
+            // ステータス表示を初期化
+            this.updateAnimationStats(currentStats, {});
 
-        // オーバーレイ表示
-        overlay.classList.remove('hidden');
-        header.innerHTML = '';
-        cards.innerHTML = '';
+            // オーバーレイ表示
+            overlay.classList.remove('hidden');
+            header.innerHTML = '';
+            cards.innerHTML = '';
 
-        // 演出シーケンス
-        const config = this.turnManager.getCurrentTurnConfig();
-        const placed = this.gameState.player.placed;
+            // 演出シーケンス
+            const config = this.turnManager.getCurrentTurnConfig();
+            const placed = this.gameState.player.placed;
 
-        let delay = 300;
-
-        // ターン情報表示
-        setTimeout(() => {
+            // ターン情報表示
+            await this._sleep(300);
             header.innerHTML = `${this.gameState.turn + 1}/8ターン ${config.week}`;
-        }, delay);
-        delay += 500;
 
-        // おすすめ行動表示
-        if (config.recommended) {
-            setTimeout(() => {
+            // おすすめ行動表示
+            if (config.recommended) {
+                await this._sleep(500);
                 header.innerHTML += `<br>🎯 おすすめ行動: ${config.recommended}`;
-            }, delay);
-            delay += 800;
-        }
+                await this._sleep(800);
+            }
 
-        // カテゴリ色マップ（CSS変数と統一）
-        const categoryColors = {
-            '動員': '#3B82F6',  // --color-mobilization
-            '教務': '#10B981',  // --color-teaching
-            '庶務': '#EC4899',  // --color-affairs
-            '応対': '#F97316'   // --color-response
-        };
+            // カテゴリ色マップ（CSS変数と統一）
+            const categoryColors = {
+                '動員': '#3B82F6',  // --color-mobilization
+                '教務': '#10B981',  // --color-teaching
+                '庶務': '#EC4899',  // --color-affairs
+                '応対': '#F97316'   // --color-response
+            };
 
-        // ステータス日本語名マップ
-        const statusNames = {
-            'experience': '体験',
-            'enrollment': '入塾',
-            'satisfaction': '満足',
-            'accounting': '経理'
-        };
+            // ステータス日本語名マップ
+            const statusNames = {
+                'experience': '体験',
+                'enrollment': '入塾',
+                'satisfaction': '満足',
+                'accounting': '経理'
+            };
 
-        // 各カード効果をリアルタイムで表示
-        const staffOrder = ['leader', 'teacher', 'staff'];
-        const staffNames = { leader: '室長', teacher: '講師', staff: '事務' };
+            // 各カード効果をリアルタイムで表示
+            const staffOrder = ['leader', 'teacher', 'staff'];
+            const staffNames = { leader: '室長', teacher: '講師', staff: '事務' };
 
-        staffOrder.forEach((staff, i) => {
-            const card = placed[staff];
-            const cardEffectInfo = actionInfo?.cardEffects?.[staff];
-            if (card && cardEffectInfo) {
-                setTimeout(() => {
-                    // カテゴリ色付き2文字
+            for (const staff of staffOrder) {
+                const staffCards = placed[staff]; // 配列
+                const cardEffectInfo = actionInfo?.cardEffects?.[staff];
+                if (staffCards.length === 0 || !cardEffectInfo) continue;
+
+                const statusName = statusNames[config.recommendedStatus] || config.recommendedStatus;
+                for (let cardIdx = 0; cardIdx < staffCards.length; cardIdx += 1) {
+                    const card = staffCards[cardIdx];
+                    const perCardInfo = cardEffectInfo.cards?.[cardIdx];
                     const categoryColor = categoryColors[card.category] || '#9CA3AF';
-                    const categoryBadge = `<span style="background:${categoryColor};color:white;padding:1px 4px;border-radius:4px;font-size:0.7em;margin-left:4px;">${card.category}</span>`;
-
-                    // おすすめ行動合致チェック
-                    const isRecommended = cardEffectInfo.isRecommended;
+                    const categoryBadge = `<span style="background:${categoryColor};color:white;padding:1px 4px;border-radius:4px;font-size:0.7em;margin-left:4px;">${this._escapeHTML(card.category)}</span>`;
+                    const isRecommended = perCardInfo?.isRecommended || false;
                     const recommendedMark = isRecommended ? ' 🎯' : '';
-
-                    // おすすめボーナス効果テキスト（日本語表記）
-                    const statusName = statusNames[config.recommendedStatus] || config.recommendedStatus;
                     const bonusText = isRecommended ? `<div class="anim-bonus-text">🎯 おすすめボーナス ${statusName}+1</div>` : '';
 
-                    // カード表示
                     cards.innerHTML = `
                         <div class="animation-card-item">
-                            <div class="anim-staff-name">${staffNames[staff]}</div>
-                            <div class="anim-card-name">${card.cardName}${categoryBadge}${recommendedMark}</div>
-                            <div class="anim-card-effect">${card.effect}</div>
+                            <div class="anim-staff-name">${staffNames[staff]}${staffCards.length > 1 ? ` (${cardIdx + 1}/${staffCards.length})` : ''}</div>
+                            <div class="anim-card-name">${this._escapeHTML(card.cardName)}${categoryBadge}${recommendedMark}</div>
+                            <div class="anim-card-effect">${this._escapeHTML(card.effect)}</div>
                             ${bonusText}
                         </div>
                     `;
 
-                    // actionInfoから実際の効果変動を取得してステータス更新
-                    const prevStats = { ...currentStats };
-
-                    // cardEffectsからの差分を適用
-                    const delta = this.calculateDelta(cardEffectInfo.beforeStats, cardEffectInfo.afterStats);
-                    Object.entries(delta).forEach(([key, value]) => {
-                        if (currentStats.hasOwnProperty(key)) {
-                            currentStats[key] += value;
-                        }
-                    });
-
-                    // ステータス変動をアニメーション表示
-                    this.updateAnimationStats(currentStats, delta);
-                }, delay + i * 2000);
+                    if (perCardInfo) {
+                        const beforeCardStats = { ...currentStats };
+                        const delta = this.calculateDelta(perCardInfo.beforeStats, perCardInfo.afterStats);
+                        Object.entries(delta).forEach(([key, value]) => {
+                            if (Object.prototype.hasOwnProperty.call(currentStats, key)) {
+                                currentStats[key] += value;
+                            }
+                        });
+                        this.updateAnimationStats(currentStats, delta, { skipRankDisplay: true });
+                        await this.animateRankUpsIfNeeded(beforeCardStats, { ...currentStats });
+                        await this._sleep(800);
+                    } else {
+                        await this._sleep(2000);
+                    }
+                }
             }
-        });
-        delay += staffOrder.filter(s => placed[s] && actionInfo?.cardEffects?.[s]).length * 2000;
 
-        // 演出終了（📊行動結果ステップを除去）
-        setTimeout(() => {
+            // 演出終了（📊行動結果ステップを除去）
+            await this._sleep(500);
+        } finally {
             overlay.classList.add('hidden');
             this.finishActionPhase();
-        }, delay + 500);
+        }
+    }
+
+    /**
+     * 指定時間待機
+     */
+    _sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /**
+     * ランクバーを段階的にアニメーション
+     */
+    async _animateStatBar(containerId, statKey, fromValue, toValue, difficulty) {
+        if (!this.scoreManager?.rankTable) return;
+
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        const fillElem = container.querySelector('.rank-progress-fill');
+        const labelElem = container.querySelector('.rank-label');
+        const deficitElem = container.querySelector('.rank-deficit');
+        if (!fillElem) return;
+
+        const updateDeficit = (rankInfo) => {
+            if (!deficitElem || !rankInfo) return;
+            if (rankInfo.deficit > 0) {
+                deficitElem.textContent = `${rankInfo.targetGrade}まであと${rankInfo.deficit}`;
+                deficitElem.classList.remove('hidden');
+            } else {
+                deficitElem.textContent = '';
+                deficitElem.classList.add('hidden');
+            }
+        };
+
+        const updateProgress = (rankInfo, value, withTransition = true) => {
+            if (!rankInfo) return;
+            const range = rankInfo.nextThreshold - rankInfo.startThreshold;
+            const progress = range > 0
+                ? Math.max(Math.min(((value - rankInfo.startThreshold) / range) * 100, 100), 0)
+                : 100;
+            fillElem.style.transition = withTransition ? 'width 0.35s ease' : 'none';
+            fillElem.style.width = `${progress}%`;
+        };
+
+        let currentValue = fromValue;
+
+        while (true) {
+            const prevRank = this.scoreManager.getStatusRank(statKey, currentValue, difficulty);
+            const finalRank = this.scoreManager.getStatusRank(statKey, toValue, difficulty);
+            if (!prevRank || !finalRank) break;
+
+            // 終点（nextThreshold）を跨ぐ場合のみ演出を行う
+            const nextThr = prevRank.nextThreshold;
+            const hasThresholdCrossing = Number.isFinite(nextThr) && currentValue < nextThr && toValue >= nextThr;
+            if (!hasThresholdCrossing) {
+                if (labelElem) labelElem.textContent = finalRank.grade;
+                updateProgress(finalRank, toValue, true);
+                await this._sleep(1000); // 跨ぎ1回分（550+50+400ms）と同程度の継続時間
+                updateDeficit(finalRank);
+                break;
+            }
+
+            // 終点を跨いだ: 100%へアニメーション
+            fillElem.style.transition = 'width 0.35s ease';
+            fillElem.style.width = '100%';
+            await this._sleep(550); // 350ms遷移 + 200ms静止
+
+            // 0%にリセット（瞬時）
+            fillElem.style.transition = 'none';
+            fillElem.style.width = '0%';
+
+            // 次のランク閾値へ進める
+            const nextThreshold = prevRank.nextThreshold;
+            if (nextThreshold <= currentValue) break;
+            currentValue = nextThreshold;
+
+            const nextRank = this.scoreManager.getStatusRank(statKey, currentValue, difficulty);
+            if (nextRank && labelElem) {
+                labelElem.textContent = nextRank.grade;
+            }
+
+            await this._sleep(50); // transition: none を確定させる
+
+            // 最終値がこのランクに収まるかチェック
+            const afterNextRank = this.scoreManager.getStatusRank(statKey, toValue, difficulty);
+            if (!afterNextRank || afterNextRank.grade === nextRank?.grade) {
+                // 最後のランク → 最終値に対応するバー位置まで伸ばす
+                if (afterNextRank && labelElem) {
+                    labelElem.textContent = afterNextRank.grade;
+                }
+                updateProgress(afterNextRank, toValue, true);
+                await this._sleep(400);
+                updateDeficit(afterNextRank);
+                break;
+            }
+            // まだランクアップが残っている → ループ継続
+        }
+    }
+
+    /**
+     * ランクアップが必要なステータスのバーを並列アニメーション
+     */
+    async animateRankUpsIfNeeded(prevStats, newStats) {
+        const difficulty = this.gameState.difficulty || 'fresh';
+        const statMap = {
+            experience: 'exp',
+            enrollment: 'enr',
+            satisfaction: 'sat',
+            accounting: 'acc'
+        };
+
+        await Promise.all(
+            Object.entries(statMap).map(([statKey, id]) => this._animateStatBar(
+                `anim-${id}-rank`,
+                statKey,
+                prevStats[statKey] ?? 0,
+                newStats[statKey] ?? 0,
+                difficulty
+            ))
+        );
     }
 
     /**
      * アニメーションステータス更新
      */
-    updateAnimationStats(stats, delta) {
+    updateAnimationStats(stats, delta, options = {}) {
         const statMap = {
             experience: 'exp',
             enrollment: 'enr',
@@ -927,6 +1383,56 @@ export class UIController {
                 } else {
                     deltaElem.textContent = '';
                     deltaElem.className = 'anim-delta';
+                }
+            }
+        });
+
+        if (!options.skipRankDisplay) {
+            this.updateAnimationRankDisplay(stats);
+        }
+    }
+
+    /**
+     * アニメーション画面のランク表示を更新
+     */
+    updateAnimationRankDisplay(stats) {
+        if (!this.scoreManager?.rankTable) return;
+        const difficulty = this.gameState.difficulty || 'fresh';
+        const statMap = {
+            experience: 'exp',
+            enrollment: 'enr',
+            satisfaction: 'sat',
+            accounting: 'acc'
+        };
+
+        Object.entries(statMap).forEach(([stat, id]) => {
+            const container = document.getElementById(`anim-${id}-rank`);
+            if (!container) return;
+
+            const value = stats[stat] ?? 0;
+            const rankInfo = this.scoreManager.getStatusRank(stat, value, difficulty);
+            if (!rankInfo) return;
+
+            const labelElem = container.querySelector('.rank-label');
+            if (labelElem) labelElem.textContent = rankInfo.grade;
+
+            const fillElem = container.querySelector('.rank-progress-fill');
+            if (fillElem) {
+                const range = rankInfo.nextThreshold - rankInfo.startThreshold;
+                const progress = range > 0
+                    ? Math.min(((value - rankInfo.startThreshold) / range) * 100, 100)
+                    : 100;
+                fillElem.style.width = `${progress}%`;
+            }
+
+            const deficitElem = container.querySelector('.rank-deficit');
+            if (deficitElem) {
+                if (rankInfo.deficit > 0) {
+                    deficitElem.textContent = `${rankInfo.targetGrade}まであと${rankInfo.deficit}`;
+                    deficitElem.classList.remove('hidden');
+                } else {
+                    deficitElem.textContent = '';
+                    deficitElem.classList.add('hidden');
                 }
             }
         });
@@ -997,19 +1503,33 @@ export class UIController {
     showMeetingPhase() {
         this.showPhaseArea('meeting');
         this.updateTurnDisplay();
+        this.updateStatusDisplay();
+        this.renderTokenDisplay();
 
-        const config = this.turnManager.getCurrentTurnConfig();
+        const maxDelete = this.turnManager.getCurrentDeleteMax();
+        const organizeBonus = this.gameState.tokens?.organize || 0;
+        this.gameState.tokens.organize = 0;  // 消費
+        const bonusInfo = document.getElementById('organize-bonus-info');
+        if (bonusInfo) {
+            if (organizeBonus > 0) {
+                bonusInfo.textContent = `🗑️ 整理トークン効果: +${organizeBonus}枚追加削除できます`;
+                bonusInfo.classList.remove('hidden');
+            } else {
+                bonusInfo.classList.add('hidden');
+            }
+        }
+
         const deleteCountElem = document.getElementById('delete-count');
         const maxDeleteElem = document.getElementById('max-delete');
 
-        if (deleteCountElem) deleteCountElem.textContent = config.delete;
-        if (maxDeleteElem) maxDeleteElem.textContent = config.delete;
+        if (deleteCountElem) deleteCountElem.textContent = maxDelete;
+        if (maxDeleteElem) maxDeleteElem.textContent = maxDelete;
 
         this.selectedCardsForDeletion = [];
         // Bug3修正: 選択済み枚数の表示を0にリセット
         const selectedCountElem = document.getElementById('selected-count');
         if (selectedCountElem) selectedCountElem.textContent = '0';
-        this.renderDeck(config.delete);
+        this.renderDeck(maxDelete);
 
         // フェーズ開始時に保存（思考場面の維持）
         this.saveGameState();
@@ -1068,8 +1588,8 @@ export class UIController {
      */
     onConfirmMeeting() {
         // Spec1修正: 最大枚数未満の場合は確認ダイアログを表示
-        const config = this.turnManager.getCurrentTurnConfig();
-        if (config.delete > 0 && this.selectedCardsForDeletion.length < config.delete) {
+        const maxDelete = this.turnManager.getCurrentDeleteMax();
+        if (maxDelete > 0 && this.selectedCardsForDeletion.length < maxDelete) {
             const confirmed = confirm('まだ削除できる枚数が残っています。次のターンに進んでよろしいですか？');
             if (!confirmed) return;
         }
@@ -1080,6 +1600,7 @@ export class UIController {
         });
 
         this.selectedCardsForDeletion = [];
+        this.gameState.tokens.organize = 0;
 
         // 手札補充は削除（アクションフェーズ開始時に引くため）
         // 代わりに、残りの手札をデッキに戻す
@@ -1102,14 +1623,16 @@ export class UIController {
      * 研修フェーズ表示（2ターン目以降）
      */
     showTrainingPhase() {
+        this.trainingSelectionMode = 'normal';
+        this.inspirationRemaining = 0;
         const config = this.turnManager.getCurrentTurnConfig();
-        console.log('[SAVE-DEBUG] showTrainingPhase: 開始, turn=', this.gameState.turn, ', training=', config.training);
+        window.CDG_DEBUG && console.log('[SAVE-DEBUG] showTrainingPhase: 開始, turn=', this.gameState.turn, ', training=', config.training);
 
         // ターン概要オーバーレイを表示
         this.showTurnOverlay(config);
 
         const trainingCards = this.cardManager.drawTrainingCards(config.training, 3);
-        console.log('[SAVE-DEBUG] showTrainingPhase: 抽選カード:', trainingCards.map(c => c.cardName));
+        window.CDG_DEBUG && console.log('[SAVE-DEBUG] showTrainingPhase: 抽選カード:', trainingCards.map(c => c.cardName));
 
         // 抽選したカードをgameStateに保存（復元時に使用）
         this.gameState.currentTrainingCards = trainingCards.map(c => ({ ...c }));
@@ -1135,12 +1658,16 @@ export class UIController {
             container.appendChild(cardElem);
         });
 
+        // リフレッシュボタン表示制御
+        this.updateTrainingRefreshUI(config.training);
         this.showPhaseArea('training');
         this.updateTurnDisplay();
+        this.updateStatusDisplay();
+        this.renderTokenDisplay();
 
         const instruction = document.querySelector('#training-area .instruction');
         if (instruction) {
-            const helpText = this.isNormalMode() ? '' : '<span class="help-longpress">[長押しで詳細]</span>';
+            const helpText = this.isShortCardDesc() ? '<span class="help-longpress">[長押しで詳細]</span>' : '';
             instruction.innerHTML = `3枚から1枚を選んで習得してください${helpText}`;
         }
     }
@@ -1200,13 +1727,186 @@ export class UIController {
     }
 
     /**
+     * 研修リフレッシュボタンの表示状態を更新
+     */
+    updateTrainingRefreshUI(rarity) {
+        const row = document.getElementById('training-refresh-row');
+        const countElem = document.getElementById('training-refresh-count');
+        if (!row) return;
+
+        const remaining = this.gameState.trainingRefreshRemaining ?? 0;
+        const enabled = this.gameState.difficulty === 'pro' && remaining > 0 && rarity !== 'N';
+
+        if (enabled) {
+            row.classList.remove('hidden');
+            if (countElem) countElem.textContent = `残り${remaining}回`;
+        } else {
+            row.classList.add('hidden');
+        }
+    }
+
+    /**
+     * 研修リフレッシュ実行
+     */
+    onTrainingRefresh() {
+        const config = this.turnManager.getCurrentTurnConfig();
+        const remaining = this.gameState.trainingRefreshRemaining ?? 0;
+        if (remaining <= 0) return;
+
+        // 現在の候補カードを取得してリフレッシュ
+        const currentCards = this.gameState.currentTrainingCards || [];
+        const isInspiration = this.trainingSelectionMode === 'inspiration';
+        const isInitialTraining = this.gameState.turn === 0;
+        const rarity = isInspiration ? 'SR' : (isInitialTraining ? 'R' : config.training);
+        const count = (isInspiration || !isInitialTraining) ? 3 : 4;
+        const newCards = this.cardManager.refreshTrainingCards(rarity, currentCards, count);
+
+        // 残り回数を減らす
+        this.gameState.trainingRefreshRemaining = remaining - 1;
+
+        // 新カードで表示を更新
+        this.gameState.currentTrainingCards = newCards.map(c => ({ ...c }));
+
+        const container = document.getElementById('training-cards');
+        if (container) {
+            container.innerHTML = '';
+            if (isInitialTraining) {
+                // 初回研修: 2枚選択モード
+                this.selectedInitialCards = [];
+                newCards.forEach(card => {
+                    const cardElem = this.createCardElement(card, {
+                        clickable: true,
+                        compact: true,
+                        onClick: (c, elem) => this.onInitialCardSelect(c, elem, newCards)
+                    });
+                    container.appendChild(cardElem);
+                });
+                // 初回研修は selectedInitialCards が2枚になるまで確定ボタン無効
+                const confirmBtn = document.getElementById('confirm-training');
+                if (confirmBtn) confirmBtn.disabled = true;
+            } else {
+                // 通常研修: 1枚選択モード
+                this.selectedTrainingCard = null;
+                newCards.forEach(card => {
+                    const cardElem = this.createCardElement(card, {
+                        clickable: true,
+                        compact: true,
+                        onClick: (c, elem) => this.onTrainingCardSelect(c, elem, container)
+                    });
+                    container.appendChild(cardElem);
+                });
+                const confirmBtn = document.getElementById('confirm-training');
+                if (confirmBtn) confirmBtn.disabled = true;
+            }
+        }
+
+        this.updateTrainingRefreshUI(rarity);
+        this.saveGameState();
+        this.logger?.log(`研修リフレッシュ実行: 残り${this.gameState.trainingRefreshRemaining}回`, 'action');
+    }
+
+    /**
+     * 発想トークン追加習得フロー開始
+     */
+    startInspirationTrainingFlow() {
+        this.trainingSelectionMode = 'inspiration';
+        this.inspirationRemaining = this.gameState.tokens?.inspiration ?? 0;
+        this.showInspirationTrainingRound();
+    }
+
+    /**
+     * 発想追加習得ラウンドの表示
+     */
+    showInspirationTrainingRound() {
+        const candidates = this.drawInspirationCandidates();
+        if (candidates.length === 0) {
+            // カードが引けない場合はスキップ
+            this.gameState.tokens.inspiration = 0;
+            this.finalizeTrainingToAction();
+            return;
+        }
+
+        this.gameState.currentTrainingCards = candidates.map(c => ({ ...c }));
+        this.selectedTrainingCard = null;
+
+        const container = document.getElementById('training-cards');
+        if (container) {
+            container.innerHTML = '';
+            candidates.forEach(card => {
+                const cardElem = this.createCardElement(card, {
+                    clickable: true,
+                    compact: true,
+                    onClick: (c, elem) => this.onTrainingCardSelect(c, elem, container)
+                });
+                container.appendChild(cardElem);
+            });
+        }
+
+        const confirmBtn = document.getElementById('confirm-training');
+        if (confirmBtn) confirmBtn.disabled = true;
+
+        const instruction = document.querySelector('#training-area .instruction');
+        if (instruction) {
+            const helpText = this.isShortCardDesc() ? '<span class="help-longpress">[長押しで詳細]</span>' : '';
+            instruction.innerHTML = `💡 発想追加習得 (残り${this.inspirationRemaining}回): SRカード3枚から1枚を選んで習得してください${helpText}`;
+        }
+
+        this.updateTrainingRefreshUI('SR');
+
+        this.showPhaseArea('training');
+        this.updateTurnDisplay();
+        this.updateStatusDisplay();
+        this.renderTokenDisplay();
+        this.saveGameState();
+    }
+
+    /**
+     * SRカードを3枚抽選して返す
+     */
+    drawInspirationCandidates() {
+        return this.cardManager.drawTrainingCards('SR', 3);
+    }
+
+    /**
+     * 発想追加習得の確定
+     */
+    confirmInspirationTraining() {
+        if (!this.selectedTrainingCard) return;
+
+        this.gameState.addToDeck({ ...this.selectedTrainingCard });
+        this.selectedTrainingCard = null;
+        this.inspirationRemaining -= 1;
+
+        if (this.inspirationRemaining > 0) {
+            this.gameState.tokens.inspiration = this.inspirationRemaining;
+            this.showInspirationTrainingRound();
+        } else {
+            this.gameState.tokens.inspiration = 0;
+            this.trainingSelectionMode = 'normal';
+            this.gameState.currentTrainingCards = null;
+            this.finalizeTrainingToAction();
+        }
+    }
+
+    /**
+     * 研修フェーズ終了→行動フェーズへ遷移する共通処理
+     */
+    finalizeTrainingToAction() {
+        this.trainingSelectionMode = 'normal';
+        // advancePhaseはtraining→action遷移を前提としている
+        this.gameState.phase = 'training';
+        this.turnManager.advancePhase();
+        this.showActionPhase();
+        this.saveGameState();
+    }
+
+    /**
      * 結果フェーズ表示
      */
     showResultPhase() {
         // Bug1修正: 最終ターンのカード情報を保存（deck + hand + placed を含める）
         const placedCards = Object.values(this.gameState.player.placed)
-            .filter(c => c !== null)
-            .map(c => ({ ...c }));
+            .flatMap(cards => cards.map(c => ({ ...c })));
         const finalDeck = [
             ...this.gameState.player.deck.map(c => ({ ...c })),
             ...this.gameState.player.hand.map(c => ({ ...c })),
@@ -1216,6 +1916,8 @@ export class UIController {
         const score = this.scoreManager.calculateScore(this.gameState);
 
         this.showPhaseArea('result');
+        this.updateStatusDisplay();
+        this.renderTokenDisplay();
 
         // ランク表示
         const rankElem = document.getElementById('result-rank');
@@ -1229,47 +1931,61 @@ export class UIController {
         // 得点内訳表示
         const breakdownElem = document.getElementById('result-breakdown');
         if (breakdownElem) {
-            breakdownElem.innerHTML = `
-                <table class="breakdown-table">
-                    <thead>
-                        <tr>
-                            <th>達成項目</th>
-                            <th>結果</th>
-                            <th>ポイント</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td>退塾目標</td>
-                            <td>退塾 ${score.withdrawal}</td>
-                            <td>${this.renderPointRange('withdrawal', score.withdrawal, score.breakdown.withdrawalPoints)}</td>
-                        </tr>
-                        <tr>
-                            <td>動員目標</td>
-                            <td>体験 ${score.mobilization}</td>
-                            <td>${this.renderPointRange('mobilization', score.mobilization, score.breakdown.mobilizationPoints)}</td>
-                        </tr>
-                        <tr>
-                            <td>入退目標</td>
-                            <td>入退差 ${score.enrollmentDiff}</td>
-                            <td>${this.renderPointRange('enrollmentDiff', score.enrollmentDiff, score.breakdown.enrollmentDiffPoints)}</td>
-                        </tr>
-                        <tr class="total-row">
-                            <td colspan="2">合計スコア</td>
-                            <td><strong>${score.points}</strong></td>
-                        </tr>
-                    </tbody>
-                </table>
-            `;
+            const difficulty = this.gameState.difficulty || 'fresh';
+            if (difficulty === 'pro') {
+                breakdownElem.innerHTML = this.renderProBreakdown(score);
+            } else {
+                breakdownElem.innerHTML = `
+                    <table class="breakdown-table">
+                        <thead>
+                            <tr>
+                                <th>達成項目</th>
+                                <th>結果</th>
+                                <th>ポイント</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>退塾目標</td>
+                                <td>退塾 ${score.withdrawal}</td>
+                                <td>${this.renderPointRange('withdrawal', score.withdrawal, score.breakdown.withdrawalPoints)}</td>
+                            </tr>
+                            <tr>
+                                <td>動員目標</td>
+                                <td>体験 ${score.mobilization}</td>
+                                <td>${this.renderPointRange('mobilization', score.mobilization, score.breakdown.mobilizationPoints)}</td>
+                            </tr>
+                            <tr>
+                                <td>入退目標</td>
+                                <td>入退差 ${score.enrollmentDiff}</td>
+                                <td>${this.renderPointRange('enrollmentDiff', score.enrollmentDiff, score.breakdown.enrollmentDiffPoints)}</td>
+                            </tr>
+                            ${score.splusBreakdown ? `
+                            <tr class="splus-breakdown-row">
+                                <td colspan="2">S+ 精度スコア内訳</td>
+                                <td>基礎8.0 + 体験+${score.splusBreakdown.expBonus}（体験${score.splusBreakdown.expUsed}）+ 入退差+${score.splusBreakdown.diffBonus}（入退差${score.splusBreakdown.diffUsed}）</td>
+                            </tr>` : ''}
+                            <tr class="total-row">
+                                <td colspan="2">合計スコア</td>
+                                <td><strong>${score.displayScore}</strong></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                `;
+            }
         }
 
         // ハイスコア保存・表示
-        this.scoreManager.saveHighScore(score);
-        const highScore = this.scoreManager.getHighScore();
+        const difficulty = this.gameState.difficulty || 'fresh';
+        this.scoreManager.saveHighScore(score, difficulty);
+        const highScore = this.scoreManager.getHighScore(difficulty);
         const highScoreElem = document.getElementById('high-score');
         if (highScoreElem && highScore) {
-            highScoreElem.textContent = `${highScore.points}ポイント`;
+            highScoreElem.textContent = `${highScore.displayScore ?? highScore.points}ポイント`;
         }
+
+        // スコア自動送信（fire-and-forget）
+        submitScore(this.gameState, score, finalDeck, this.logger);
 
         // セーブデータクリア（ゲーム終了）
         this.saveManager?.clear();
@@ -1348,6 +2064,58 @@ export class UIController {
     }
 
     /**
+     * PRO難易度の結果内訳テーブルを生成
+     * @param {Object} score - calculateScorePro() の戻り値
+     * @returns {string} HTML文字列
+     */
+    renderProBreakdown(score) {
+        const b = score.breakdown;
+        const formatPoints = (pts) => {
+            if (pts > 0) return `<span class="point-active">+${pts}</span>`;
+            if (pts < 0) return `<span class="point-active">${pts}</span>`;
+            return `<span class="point-inactive">0</span>`;
+        };
+
+        return `
+            <table class="breakdown-table">
+                <thead>
+                    <tr>
+                        <th>達成項目</th>
+                        <th>結果</th>
+                        <th>スコア</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>動員</td>
+                        <td>体験 ${score.experience}</td>
+                        <td>${formatPoints(b.mobilizationPoints)}</td>
+                    </tr>
+                    <tr>
+                        <td>退塾</td>
+                        <td>退塾 ${score.withdrawal}</td>
+                        <td>${formatPoints(b.withdrawalPoints)}</td>
+                    </tr>
+                    <tr>
+                        <td>入退差</td>
+                        <td>入退差 ${score.enrollmentDiff}</td>
+                        <td>${formatPoints(b.enrollmentDiffPoints)}</td>
+                    </tr>
+                    <tr>
+                        <td>満足</td>
+                        <td>満足 ${score.satisfaction}</td>
+                        <td>${formatPoints(b.satisfactionPoints)}</td>
+                    </tr>
+                    <tr class="total-row">
+                        <td colspan="2">合計スコア</td>
+                        <td><strong>${score.displayScore}</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+        `;
+    }
+
+    /**
      * スコア共有
      */
     onShareScore() {
@@ -1378,7 +2146,16 @@ export class UIController {
      */
     onRestart() {
         this.logger.clear();
-        this.onStartGame();
+
+        // 全フェーズエリアを非表示
+        ['training-area', 'action-area', 'meeting-area', 'result-area'].forEach(id => {
+            const elem = document.getElementById(id);
+            if (elem) elem.classList.add('hidden');
+        });
+
+        // タイトル画面を再表示（難易度選択から）
+        const overlay = document.getElementById('start-overlay');
+        overlay?.classList.remove('hidden');
     }
 
     /**
@@ -1486,7 +2263,247 @@ export class UIController {
         });
 
         content.appendChild(table);
+        this.renderScoreSection(content);
         document.body.appendChild(overlay);
+    }
+
+    /**
+     * スコア換算表セクションをスケジュールオーバーレイに追加
+     */
+    renderScoreSection(content) {
+        const difficulty = this.gameState.difficulty || 'fresh';
+        const withdrawal = this.scoreManager?.calculateWithdrawal?.(this.gameState) ?? 0;
+        const mobilization = this.gameState.player.experience;
+        const enrollmentDiff = this.gameState.player.enrollment - withdrawal;
+        const satisfaction = this.gameState.player.satisfaction;
+
+        // ---- セクションタイトル ----
+        const title = document.createElement('div');
+        title.className = 'score-section-title';
+        title.textContent = '📊 スコア換算表';
+        content.appendChild(title);
+
+        // ---- サマリー行 ----
+        const summary = document.createElement('div');
+        summary.className = 'score-summary';
+
+        if (difficulty === 'fresh') {
+            summary.textContent = `退塾${withdrawal}名 / 体験${mobilization} / 入退差${enrollmentDiff}`;
+        } else {
+            summary.textContent = `退塾${withdrawal}名 / 体験${mobilization} / 入退差${enrollmentDiff} / 満足${satisfaction}`;
+        }
+        content.appendChild(summary);
+
+        if (difficulty === 'fresh') {
+            this._renderFreshScoreTable(content, withdrawal, mobilization, enrollmentDiff);
+        } else {
+            this._renderProScoreTable(content, withdrawal, mobilization, enrollmentDiff, satisfaction);
+        }
+    }
+
+    /**
+     * FRESHのスコア換算表を描画
+     */
+    _renderFreshScoreTable(content, withdrawal, mobilization, enrollmentDiff) {
+        // ---- 退塾 + 動員 の2列グリッド ----
+        const grid1 = document.createElement('div');
+        grid1.className = 'score-grid';
+
+        // 退塾ポイントテーブル
+        const withdrawalRows = [
+            { label: '0〜1', min: 0, max: 1, pts: 1 },
+            { label: '2〜3', min: 2, max: 3, pts: 0 },
+            { label: '4以上', min: 4, max: Infinity, pts: -3 },
+        ];
+        grid1.appendChild(this._buildScoreTable(
+            '退塾ポイント',
+            [{ header: '退塾数' }, { header: 'pt' }],
+            withdrawalRows.map(r => ({
+                cells: [r.label, this._fmtPts(r.pts)],
+                current: withdrawal >= r.min && withdrawal <= r.max,
+            }))
+        ));
+
+        // 動員ポイントテーブル
+        const mobilizationRows = [
+            { label: '12以上', min: 12, max: Infinity, pts: 2 },
+            { label: '10〜11', min: 10, max: 11, pts: 1 },
+            { label: '9以下', min: 0, max: 9, pts: 0 },
+        ];
+        grid1.appendChild(this._buildScoreTable(
+            '動員ポイント',
+            [{ header: '体験' }, { header: 'pt' }],
+            mobilizationRows.map(r => ({
+                cells: [r.label, this._fmtPts(r.pts)],
+                current: mobilization >= r.min && mobilization <= r.max,
+            }))
+        ));
+        content.appendChild(grid1);
+
+        // ---- 入退差（全幅） ----
+        const enrollmentRows = [
+            { label: '12以上', min: 12, max: Infinity, pts: 5 },
+            { label: '10〜11', min: 10, max: 11, pts: 4 },
+            { label: '8〜9', min: 8, max: 9, pts: 3 },
+            { label: '7以下', min: -Infinity, max: 7, pts: 0 },
+        ];
+        const fullTable = this._buildScoreTable(
+            '入退差ポイント',
+            [{ header: '入退差（入塾−退塾）' }, { header: 'pt' }],
+            enrollmentRows.map(r => ({
+                cells: [r.label, this._fmtPts(r.pts)],
+                current: enrollmentDiff >= (r.min === -Infinity ? -999 : r.min) && enrollmentDiff <= (r.max === Infinity ? 999 : r.max),
+            }))
+        );
+        fullTable.style.marginBottom = '6px';
+        content.appendChild(fullTable);
+
+        // S+条件ノート
+        const note = document.createElement('div');
+        note.className = 'score-note';
+        note.textContent = '★ S+条件: 観点別得点8点時の精度計算で合計9.0以上';
+        content.appendChild(note);
+    }
+
+    /**
+     * PROのスコア換算表を描画
+     */
+    _renderProScoreTable(content, withdrawal, mobilization, enrollmentDiff, satisfaction) {
+        // ---- 動員 + 満足 の2列グリッド ----
+        const grid1 = document.createElement('div');
+        grid1.className = 'score-grid';
+
+        // 動員ポイント（体験数 → scores.mobilization）
+        // rankPro.csv: C=15→1, B=20→2, B+=23→2(同), A=25→3, A+=32→3(同), S=40→4, S+=50→5
+        const mobilizationRows = [
+            { label: '50以上', min: 50, max: Infinity, pts: 5 },
+            { label: '40〜49', min: 40, max: 49, pts: 4 },
+            { label: '25〜39', min: 25, max: 39, pts: 3 },
+            { label: '20〜24', min: 20, max: 24, pts: 2 },
+            { label: '15〜19', min: 15, max: 19, pts: 1 },
+            { label: '14以下', min: 0, max: 14, pts: 0 },
+        ];
+        grid1.appendChild(this._buildScoreTable(
+            '動員ポイント',
+            [{ header: '体験' }, { header: 'pt' }],
+            mobilizationRows.map(r => ({
+                cells: [r.label, this._fmtPts(r.pts)],
+                current: mobilization >= r.min && mobilization <= r.max,
+            }))
+        ));
+
+        // 満足ポイント（rankPro.csv基準: SS=35以上→2pt, S+=25以上→1pt, それ以外→0pt）
+        const satisfactionRows = [
+            { label: '35以上', min: 35, max: Infinity, pts: 2 },
+            { label: '25〜34', min: 25, max: 34, pts: 1 },
+            { label: '24以下', min: 0, max: 24, pts: 0 },
+        ];
+        grid1.appendChild(this._buildScoreTable(
+            '満足ポイント',
+            [{ header: '満足' }, { header: 'pt' }],
+            satisfactionRows.map(r => ({
+                cells: [r.label, this._fmtPts(r.pts)],
+                current: satisfaction >= r.min && satisfaction <= r.max,
+            }))
+        ));
+        content.appendChild(grid1);
+
+        // ---- 退塾 + 入退差 の2列グリッド ----
+        const grid2 = document.createElement('div');
+        grid2.className = 'score-grid';
+
+        // 退塾ポイント（withdrawal <= withdrawalThreshold → score）
+        // rankPro.csv: S+=0→+1, S=1→0, A=2→-1, B=3→-3, C=4→-5, F=30→-13（E行はscore空欄でスキップ→Fにフォールスルー）
+        const withdrawalRows = [
+            { label: '0', min: 0, max: 0, pts: 1 },
+            { label: '1', min: 1, max: 1, pts: 0 },
+            { label: '2', min: 2, max: 2, pts: -1 },
+            { label: '3', min: 3, max: 3, pts: -3 },
+            { label: '4', min: 4, max: 4, pts: -5 },
+            { label: '5以上', min: 5, max: Infinity, pts: -13 },
+        ];
+        grid2.appendChild(this._buildScoreTable(
+            '退塾ポイント',
+            [{ header: '退塾数' }, { header: 'pt' }],
+            withdrawalRows.map(r => ({
+                cells: [r.label, this._fmtPts(r.pts)],
+                current: withdrawal >= r.min && withdrawal <= (r.max === Infinity ? 9999 : r.max),
+            }))
+        ));
+
+        // 入退差ポイント（enrollmentDiff >= enrollmentDiffThreshold → score）
+        // rankPro.csv: F=0→0, E=4→0, D=8→0, C=12→1, B=16→2, B+=18→3, A=20→4, A+=26→5, S=32→6, S+=40→7, SS=48→8
+        const enrollmentRows = [
+            { label: '48以上', min: 48, max: Infinity, pts: 8 },
+            { label: '40〜47', min: 40, max: 47, pts: 7 },
+            { label: '32〜39', min: 32, max: 39, pts: 6 },
+            { label: '26〜31', min: 26, max: 31, pts: 5 },
+            { label: '20〜25', min: 20, max: 25, pts: 4 },
+            { label: '18〜19', min: 18, max: 19, pts: 3 },
+            { label: '16〜17', min: 16, max: 17, pts: 2 },
+            { label: '12〜15', min: 12, max: 15, pts: 1 },
+            { label: '11以下', min: -Infinity, max: 11, pts: 0 },
+        ];
+        grid2.appendChild(this._buildScoreTable(
+            '入退差ポイント',
+            [{ header: '入退差' }, { header: 'pt' }],
+            enrollmentRows.map(r => ({
+                cells: [r.label, this._fmtPts(r.pts)],
+                current: enrollmentDiff >= (r.min === -Infinity ? -9999 : r.min) && enrollmentDiff <= (r.max === Infinity ? 9999 : r.max),
+            }))
+        ));
+        content.appendChild(grid2);
+    }
+
+    /**
+     * スコアテーブルを生成するヘルパー
+     * @param {string} categoryTitle - テーブルタイトル
+     * @param {Array<{header:string}>} headers - ヘッダー列定義
+     * @param {Array<{cells:string[], current:boolean}>} rows - 行データ
+     * @returns {HTMLElement} テーブル要素を内包するラッパーdiv
+     */
+    _buildScoreTable(categoryTitle, headers, rows) {
+        const wrapper = document.createElement('div');
+
+        const catTitle = document.createElement('div');
+        catTitle.className = 'score-category-title';
+        catTitle.textContent = categoryTitle;
+        wrapper.appendChild(catTitle);
+
+        const table = document.createElement('table');
+        table.className = 'score-table';
+
+        const thead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        headers.forEach(h => {
+            const th = document.createElement('th');
+            th.textContent = h.header;
+            headerRow.appendChild(th);
+        });
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement('tbody');
+        rows.forEach(row => {
+            const tr = document.createElement('tr');
+            if (row.current) tr.className = 'current';
+            row.cells.forEach(cell => {
+                const td = document.createElement('td');
+                td.textContent = cell;
+                tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        wrapper.appendChild(table);
+        return wrapper;
+    }
+
+    /**
+     * ポイント値を表示用文字列に変換（正数は+付き）
+     */
+    _fmtPts(pts) {
+        return pts > 0 ? `+${pts}` : `${pts}`;
     }
 
     /**
@@ -1518,11 +2535,11 @@ export class UIController {
      * ゲーム状態復元後のUI更新
      */
     restoreUI() {
-        console.log('[SAVE-DEBUG] restoreUI: 開始');
-        console.log('[SAVE-DEBUG] restoreUI: phase=', this.gameState.phase, ', turn=', this.gameState.turn);
-        console.log('[SAVE-DEBUG] restoreUI: currentTrainingCards=', this.gameState.currentTrainingCards?.map(c => c.cardName));
-        console.log('[SAVE-DEBUG] restoreUI: hand=', this.gameState.player.hand.map(c => c.cardName));
-        console.log('[SAVE-DEBUG] restoreUI: deck=', this.gameState.player.deck.map(c => c.cardName));
+        window.CDG_DEBUG && console.log('[SAVE-DEBUG] restoreUI: 開始');
+        window.CDG_DEBUG && console.log('[SAVE-DEBUG] restoreUI: phase=', this.gameState.phase, ', turn=', this.gameState.turn);
+        window.CDG_DEBUG && console.log('[SAVE-DEBUG] restoreUI: currentTrainingCards=', this.gameState.currentTrainingCards?.map(c => c.cardName));
+        window.CDG_DEBUG && console.log('[SAVE-DEBUG] restoreUI: hand=', this.gameState.player.hand.map(c => c.cardName));
+        window.CDG_DEBUG && console.log('[SAVE-DEBUG] restoreUI: deck=', this.gameState.player.deck.map(c => c.cardName));
 
         // スタートオーバーレイを非表示
         const overlay = document.getElementById('start-overlay');
@@ -1534,6 +2551,7 @@ export class UIController {
         // ステータスとターン表示を更新
         this.updateStatusDisplay();
         this.updateTurnDisplay();
+        this.renderTokenDisplay();
 
         // 現在のフェーズに応じてUIを表示
         const phase = this.gameState.phase;
@@ -1557,7 +2575,7 @@ export class UIController {
         this.showFloatNotification('前回の続きから再開します', 'info');
 
         this.logger?.log('UIを復元しました', 'info');
-        console.log('[SAVE-DEBUG] restoreUI: 完了');
+        window.CDG_DEBUG && console.log('[SAVE-DEBUG] restoreUI: 完了');
     }
 
     /**
@@ -1566,12 +2584,41 @@ export class UIController {
     restoreTrainingUI() {
         // gameState.currentTrainingCards から復元
         const trainingCards = this.gameState.currentTrainingCards;
-        console.log('[SAVE-DEBUG] restoreTrainingUI: trainingCards=', trainingCards?.map(c => c.cardName));
+        window.CDG_DEBUG && console.log('[SAVE-DEBUG] restoreTrainingUI: trainingCards=', trainingCards?.map(c => c.cardName));
 
         if (!trainingCards || trainingCards.length === 0) {
-            console.error('[SAVE-DEBUG] restoreTrainingUI: 研修カードが見つかりません！');
+            window.CDG_DEBUG && console.error('[SAVE-DEBUG] restoreTrainingUI: 研修カードが見つかりません！');
             // フォールバック: 新規抽選（本来ありえない）
             this.showInitialTraining();
+            return;
+        }
+
+        // 発想追加習得フロー中の復元
+        if ((this.gameState.tokens?.inspiration ?? 0) > 0) {
+            this.trainingSelectionMode = 'inspiration';
+            this.inspirationRemaining = this.gameState.tokens.inspiration;
+            // showInspirationTrainingRound は currentTrainingCards を再抽選するが、
+            // 復元時はすでに保存済みのカードを使う
+            const container = document.getElementById('training-cards');
+            if (container) {
+                container.innerHTML = '';
+                trainingCards.forEach(card => {
+                    const cardElem = this.createCardElement(card, {
+                        clickable: true,
+                        compact: true,
+                        onClick: (c, elem) => this.onTrainingCardSelect(c, elem, container)
+                    });
+                    container.appendChild(cardElem);
+                });
+            }
+            const confirmBtn = document.getElementById('confirm-training');
+            if (confirmBtn) confirmBtn.disabled = true;
+            const instruction = document.querySelector('#training-area .instruction');
+            if (instruction) {
+                const helpText = this.isShortCardDesc() ? '<span class="help-longpress">[長押しで詳細]</span>' : '';
+                instruction.innerHTML = `💡 発想追加習得 (残り${this.inspirationRemaining}回): SRカード3枚から1枚を選んで習得してください${helpText}`;
+            }
+            this.updateTrainingRefreshUI('SR');
             return;
         }
 
@@ -1586,6 +2633,7 @@ export class UIController {
         this.showPhaseArea('action');
         this.updateTurnDisplay();
         this.updateStatusDisplay();
+        this.renderTokenDisplay();
 
         // スタッフスロットをクリア
         this.clearStaffSlots();
@@ -1593,13 +2641,23 @@ export class UIController {
         // 配置済みカードを復元
         const placed = this.gameState.player.placed;
         for (const staff of ['leader', 'teacher', 'staff']) {
-            if (placed[staff]) {
-                this.placeCardToSlot(placed[staff], staff);
+            for (const card of placed[staff]) {
+                this.placeCardToSlot(card, staff);
             }
         }
 
+        this.selectedCardForPlacement = null;
+
         // 手札表示
         this.renderHand();
+        const btnSlotManual = document.getElementById('btn-slot-manual');
+        if (btnSlotManual) {
+            btnSlotManual.classList.toggle('active', this.slotSelectionMode);
+            btnSlotManual.title = this.slotSelectionMode
+                ? 'スロット手動指定: ON（カードを選んでからスロットをタップ）'
+                : 'スロット手動指定: OFF（タップで自動配置）';
+        }
+        this.selectedCardForPlacement = null;
 
         // スタッフスロットにドロップイベント設定
         this.setupDropZones();
@@ -1617,6 +2675,7 @@ export class UIController {
 
         const buildVersion = window.BUILD_VERSION || 'unknown';
         const currentFontMode = localStorage.getItem('cdg_font_mode') || 'normal';
+        const currentCardDesc = localStorage.getItem('cdg_card_desc') || 'full';
 
         // バッジ表示判定
         const showTutorialBadge = !localStorage.getItem('cdg_visited');
@@ -1631,6 +2690,14 @@ export class UIController {
                         <button class="font-toggle-option${currentFontMode === 'normal' ? ' active' : ''}" data-mode="normal">標準</button>
                     </div>
                     <p class="font-toggle-note">変更した文字サイズは次回再読み込み時に適用されます</p>
+                </div>
+                <div class="settings-section">
+                    <h3>カード説明</h3>
+                    <div class="font-toggle">
+                        <button class="font-toggle-option${currentCardDesc === 'full' ? ' active' : ''}" data-card-desc="full">全文</button>
+                        <button class="font-toggle-option${currentCardDesc === 'short' ? ' active' : ''}" data-card-desc="short">短縮</button>
+                    </div>
+                    <p class="font-toggle-note">短縮表示時は長押しで全文を確認できます</p>
                 </div>
                 <div class="settings-section">
                     <h3>リンク</h3>
@@ -1677,14 +2744,29 @@ export class UIController {
             }
         });
 
-        // 文字サイズトグルのイベント
-        content.querySelectorAll('.font-toggle-option').forEach(btn => {
-            btn.addEventListener('click', () => {
-                this.setFontMode(btn.dataset.mode);
-                // トグルUI更新
-                content.querySelectorAll('.font-toggle-option').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-            });
+        // 設定トグルのイベント
+        content.addEventListener('click', (e) => {
+            const settingsElem = e.currentTarget;
+
+            // data-mode ボタン（文字サイズ）
+            const fontBtn = e.target.closest('[data-mode]');
+            if (fontBtn) {
+                const mode = fontBtn.dataset.mode;
+                this.setFontMode(mode);
+                settingsElem.querySelectorAll('[data-mode]').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.mode === mode);
+                });
+            }
+
+            // data-card-desc ボタン（カード説明）
+            const cardDescBtn = e.target.closest('[data-card-desc]');
+            if (cardDescBtn) {
+                const mode = cardDescBtn.dataset.cardDesc;
+                this.setCardDesc(mode);
+                settingsElem.querySelectorAll('[data-card-desc]').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.cardDesc === mode);
+                });
+            }
         });
 
         document.body.appendChild(overlay);

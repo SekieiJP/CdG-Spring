@@ -242,6 +242,21 @@ body {
     border-radius: var(--border-radius-sm);
 }
 
+.organize-bonus-info {
+    background: rgba(20, 160, 100, 0.12);
+    border: 1px solid #14a064;
+    border-radius: var(--border-radius);
+    color: #14a064;
+    font-size: 0.9em;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    margin-bottom: var(--spacing-sm);
+    text-align: center;
+}
+
+.organize-bonus-info.hidden {
+    display: none;
+}
+
 /* ==================== カード ==================== */
 .card {
     background: var(--color-bg-card);
@@ -264,6 +279,13 @@ body {
 .card.selected {
     border-color: var(--color-primary);
     background: var(--color-bg-light);
+}
+
+/* 手動指定モードで選択中のカード */
+.card.selected-for-placement {
+    outline: 3px solid var(--color-primary);
+    outline-offset: 2px;
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
 }
 
 /* 削除画面での選択ハイライト（赤） */
@@ -412,6 +434,28 @@ body {
 }
 
 /* ==================== スタッフエリア（1行3枚） ==================== */
+.slot-mode-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: var(--spacing-xs);
+}
+
+.btn-slot-toggle {
+    font-size: 0.75rem;
+    padding: 4px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    background: var(--color-bg-light);
+    cursor: pointer;
+    color: var(--color-text-secondary);
+}
+
+.btn-slot-toggle.active {
+    background: var(--color-primary);
+    color: white;
+    border-color: var(--color-primary);
+}
+
 .staff-area {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -438,9 +482,20 @@ body {
     border: 2px dashed var(--color-border);
     border-radius: var(--border-radius);
     display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 4px;
+    padding: 4px;
+    transition: border-color 0.2s, background 0.2s;
+}
+
+.card-slot .slot-placeholder {
+    display: flex;
     align-items: center;
     justify-content: center;
-    transition: border-color 0.2s, background 0.2s;
+    flex: 1;
+    min-height: 72px;
 }
 
 .card-slot.drag-over {
@@ -784,6 +839,14 @@ body {
 
 .rank-A {
     color: #3B82F6;
+}
+
+.rank-Aplus {
+    color: #3B82F6;
+}
+
+.rank-Bplus {
+    color: #10B981;
 }
 
 .rank-S {
@@ -1293,6 +1356,66 @@ body {
     color: var(--color-accent);
 }
 
+/* スコア換算表 */
+.score-section-title {
+    font-size: 0.85rem;
+    font-weight: bold;
+    margin: 14px 0 4px;
+    color: var(--color-accent);
+    border-top: 1px solid #444;
+    padding-top: 10px;
+}
+
+.score-summary {
+    font-size: 0.72rem;
+    color: #bbb;
+    margin-bottom: 8px;
+}
+
+.score-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.score-category-title {
+    font-size: 0.72rem;
+    font-weight: bold;
+    color: #ccc;
+    margin-bottom: 2px;
+}
+
+.score-table {
+    width: 100%;
+    font-size: 0.7rem;
+    border-collapse: collapse;
+}
+
+.score-table th,
+.score-table td {
+    padding: 3px 5px;
+    border: 1px solid #444;
+    text-align: center;
+}
+
+.score-table th {
+    background: #2a2a2a;
+    color: #aaa;
+}
+
+.score-table tr.current {
+    background: rgba(59, 130, 246, 0.35);
+    font-weight: bold;
+}
+
+.score-note {
+    font-size: 0.68rem;
+    color: #aaa;
+    margin-top: 4px;
+    margin-bottom: 8px;
+}
+
 /* ==================== フロート通知 ==================== */
 .float-notification {
     position: fixed;
@@ -1411,9 +1534,13 @@ html.font-normal .compact-stats {
     white-space: nowrap;
 }
 
-/* 標準モードで長押しヘルプ非表示 */
-html.font-normal .help-longpress {
+/* 長押しヘルプは短縮説明モード時のみ表示 */
+.help-longpress {
     display: none;
+}
+
+html.card-desc-short .help-longpress {
+    display: block;
 }
 
 /* 文字サイズトグルスイッチ */
@@ -1448,4 +1575,242 @@ html.font-normal .help-longpress {
     font-size: 0.8rem;
     color: var(--color-text-secondary);
     margin-top: var(--spacing-xs);
+}
+
+/* ==================== 難易度選択UI ==================== */
+.difficulty-selector {
+    margin: var(--spacing-lg) 0;
+}
+
+.difficulty-label {
+    font-size: 0.875rem;
+    color: var(--color-text-secondary);
+    margin-bottom: var(--spacing-sm);
+    text-align: center;
+}
+
+.difficulty-buttons {
+    display: flex;
+    gap: var(--spacing-md);
+    justify-content: center;
+}
+
+.difficulty-btn {
+    position: relative;
+    flex: 1;
+    max-width: 140px;
+    padding: var(--spacing-md) var(--spacing-sm);
+    background: var(--color-bg-light);
+    border: 2px solid var(--color-border);
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+    text-align: center;
+}
+
+.difficulty-btn:hover {
+    border-color: var(--color-primary);
+    background: rgba(59, 130, 246, 0.05);
+}
+
+.difficulty-btn.selected {
+    border-color: var(--color-primary);
+    background: rgba(59, 130, 246, 0.15);
+    box-shadow: 0 0 0 1px var(--color-primary);
+}
+
+.difficulty-name {
+    display: block;
+    font-size: 1.25rem;
+    font-weight: bold;
+    color: var(--color-text);
+    margin-bottom: var(--spacing-xs);
+}
+
+.difficulty-desc {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+}
+
+/* 初訪問者向け吹き出し */
+.fresh-tooltip {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--color-primary);
+    color: white;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-radius: var(--border-radius);
+    font-size: 0.7rem;
+    font-weight: 500;
+    white-space: nowrap;
+    line-height: 1.4;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    animation: tooltip-bounce 2s ease-in-out infinite;
+    z-index: 10;
+}
+
+.fresh-tooltip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 6px solid transparent;
+    border-top-color: var(--color-primary);
+}
+
+.fresh-tooltip.hidden {
+    display: none;
+}
+
+@keyframes tooltip-bounce {
+    0%, 100% {
+        transform: translateX(-50%) translateY(0);
+    }
+    50% {
+        transform: translateX(-50%) translateY(-4px);
+    }
+}
+/* 研修リフレッシュ行 */
+#training-refresh-row {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0 4px;
+}
+
+#training-refresh-row.hidden {
+    display: none;
+}
+
+#training-refresh-count {
+    background-color: #6b1a2a;
+    color: #f5c6ce;
+    font-size: 0.78rem;
+    font-weight: bold;
+    padding: 3px 10px;
+    border-radius: 12px;
+    white-space: nowrap;
+}
+
+/* ===== ドロー変動通知 ===== */
+.draw-notification {
+    margin: 8px 0 10px;
+    padding: 8px 10px;
+    border: 1px solid #fcd34d;
+    border-radius: 10px;
+    background: #fef3c7;
+    text-align: center;
+}
+
+.draw-notif-text {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #92400e;
+    line-height: 1.4;
+}
+
+.draw-notification.hidden {
+    display: none;
+}
+
+/* ===== トークンチップ表示 ===== */
+.token-display {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 0 2px;
+}
+
+.token-status-display {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    width: 100%;
+    padding: 0 var(--spacing-md) var(--spacing-sm);
+    background: var(--color-bg);
+}
+
+.token-status-display.hidden {
+    display: none;
+}
+
+.token-chip {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.8rem;
+    font-weight: bold;
+    padding: 3px 10px;
+    border-radius: 12px;
+    white-space: nowrap;
+}
+
+.token-passion {
+    background-color: #7a1f2e;
+    color: #fdd;
+}
+
+.token-inspiration {
+    background-color: #1a4a7a;
+    color: #cdf;
+}
+
+.token-organize {
+    background-color: #2a5a2a;
+    color: #cfc;
+}
+
+.token-fatigue {
+    background-color: #4a4a4a;
+    color: #ddd;
+}
+
+/* ステータスランク表示 */
+.status-rank-info {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin-top: 2px;
+    font-size: 0.7rem;
+    min-height: 16px;
+}
+
+.rank-label {
+    font-weight: bold;
+    color: #f0c040;
+    min-width: 1.5em;
+    text-align: center;
+}
+
+.rank-progress {
+    flex: 1;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.rank-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4fc3f7, #81c784);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+    width: 0%;
+}
+
+.rank-deficit {
+    width: 100%;
+    color: #aaa;
+    white-space: nowrap;
+    font-size: 0.65rem;
+    text-align: center;
+}
+
+.rank-deficit.hidden {
+    display: none;
 }

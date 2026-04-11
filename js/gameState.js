@@ -1,34 +1,55 @@
 /**
  * GameState - ゲーム状態管理
  */
+import { getDifficultyConfig } from './difficultyConfig.js';
+
 export class GameState {
     constructor(logger) {
         this.logger = logger;
+        this.difficulty = 'fresh';
         this.reset();
     }
 
     /**
      * ゲーム状態をリセット
+     * @param {string} [difficulty] - 難易度ID ('fresh' or 'pro')。省略時は現在の難易度を維持
      */
-    reset() {
+    reset(difficulty) {
+        if (difficulty) {
+            this.difficulty = difficulty;
+        }
+        const config = getDifficultyConfig(this.difficulty);
+
         this.player = {
-            experience: 0,       // 体験
-            enrollment: 0,       // 入塾
-            satisfaction: 3,     // 満足
-            accounting: 3,       // 経理
+            experience: config.initialStatus.experience,
+            enrollment: config.initialStatus.enrollment,
+            satisfaction: config.initialStatus.satisfaction,
+            accounting: config.initialStatus.accounting,
             deck: [],           // デッキ
             hand: [],           // 手札
             placed: {           // 配置済みカード
-                leader: null,
-                teacher: null,
-                staff: null
+                leader: [],
+                teacher: [],
+                staff: []
             }
         };
 
         this.turn = 0;  // 0-7 (1月下旬〜5月上旬)
         this.phase = 'start';  // start, training, action, meeting, end
+        this.tokens = { passion: 0, inspiration: 0, organize: 0, fatigue: 0 };
+        // 研修リフレッシュ残り回数
+        const difficultyId = difficulty || this.difficulty;
+        const diffConfig = getDifficultyConfig(difficultyId || 'fresh');
+        this.trainingRefreshRemaining = diffConfig.trainingRefresh?.enabled
+            ? diffConfig.trainingRefresh.maxCount : 0;
+        this.startedAt = null;
+        this.discardedCards = [];  // 途中で削除したカード名の一覧
 
-        this.logger?.log('ゲーム状態を初期化しました', 'info');
+        this.logger?.log(`ゲーム状態を初期化しました (難易度: ${config.name})`, 'info');
+    }
+
+    recordStartTime() {
+        this.startedAt = new Date().toISOString();
     }
 
     /**
@@ -43,8 +64,8 @@ export class GameState {
 
         // 境界値チェック
         if (type === 'accounting') {
-            // 経理は0-15の範囲
-            newValue = Math.max(0, Math.min(15, newValue));
+            // 経理は0以上（上限なし）
+            newValue = Math.max(0, newValue);
         } else {
             // その他は0以上
             newValue = Math.max(0, newValue);
@@ -162,7 +183,7 @@ export class GameState {
      * カードを配置
      */
     placeCard(card, staff) {
-        this.player.placed[staff] = card;
+        this.player.placed[staff].push(card);
         const staffNames = { leader: '室長', teacher: '講師', staff: '事務' };
         this.logger?.log(`${staffNames[staff]}に配置: ${card.cardName}`, 'action');
     }
@@ -171,7 +192,17 @@ export class GameState {
      * 配置をクリア
      */
     clearPlaced() {
-        this.player.placed = { leader: null, teacher: null, staff: null };
+        this.player.placed = { leader: [], teacher: [], staff: [] };
+    }
+
+    /**
+     * 配置済みカードを取り消し
+     */
+    removePlacedCard(card, staff) {
+        const idx = this.player.placed[staff].indexOf(card);
+        if (idx > -1) {
+            this.player.placed[staff].splice(idx, 1);
+        }
     }
 
     /**
@@ -191,6 +222,7 @@ export class GameState {
         const index = this.player.deck.indexOf(card);
         if (index > -1) {
             this.player.deck.splice(index, 1);
+            this.discardedCards.push(card.cardName);
             this.logger?.log(`カード削除: ${card.cardName}`, 'action');
             return true;
         }
@@ -201,10 +233,11 @@ export class GameState {
      * 全カードをデッキに戻す（手札・配置済みを含む）
      */
     returnAllToDeck() {
-        // 配置済みカードをデッキに戻す
-        Object.values(this.player.placed).forEach(card => {
-            if (card) this.player.deck.push(card);
-        });
+        // 配置済みカードをデッキに戻す（配列対応）
+        const placedCards = Object.values(this.player.placed).flatMap(cards =>
+            Array.isArray(cards) ? cards : (cards ? [cards] : [])
+        );
+        placedCards.forEach(card => this.player.deck.push(card));
 
         // 手札をデッキに戻す
         this.player.hand.forEach(card => {

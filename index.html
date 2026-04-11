@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="description" content="カードで学習塾 春期講習編 - 学習塾経営シミュレーションゲーム">
     <title>カードで学習塾 春期講習編</title>
-    <link rel="stylesheet" href="css/style.css?v=20260220-2350">
+    <link rel="stylesheet" href="css/style.css?v=20260411-0900">
 </head>
 
 <body>
@@ -53,24 +53,42 @@
             <div class="status-item status-experience">
                 <div class="status-label">体験</div>
                 <div class="status-value" id="status-experience">0</div>
-                <div class="status-target">目標: 10+</div>
+                <div class="status-rank-info" id="rank-info-experience">
+                    <span class="rank-label"></span>
+                    <div class="rank-progress"><div class="rank-progress-fill"></div></div>
+                    <span class="rank-deficit"></span>
+                </div>
             </div>
             <div class="status-item status-enrollment">
                 <div class="status-label">入塾</div>
                 <div class="status-value" id="status-enrollment">0</div>
-                <div class="status-target">目標: 8+</div>
+                <div class="status-rank-info" id="rank-info-enrollment">
+                    <span class="rank-label"></span>
+                    <div class="rank-progress"><div class="rank-progress-fill"></div></div>
+                    <span class="rank-deficit"></span>
+                </div>
             </div>
             <div class="status-item status-satisfaction">
                 <div class="status-label">満足</div>
                 <div class="status-value" id="status-satisfaction">3</div>
-                <div class="status-target">目標: 15</div>
+                <div class="status-rank-info" id="rank-info-satisfaction">
+                    <span class="rank-label"></span>
+                    <div class="rank-progress"><div class="rank-progress-fill"></div></div>
+                    <span class="rank-deficit"></span>
+                </div>
             </div>
             <div class="status-item status-accounting">
                 <div class="status-label">経理</div>
                 <div class="status-value" id="status-accounting">3</div>
-                <div class="status-target">目標: 15</div>
+                <div class="status-rank-info" id="rank-info-accounting">
+                    <span class="rank-label"></span>
+                    <div class="rank-progress"><div class="rank-progress-fill"></div></div>
+                    <span class="rank-deficit"></span>
+                </div>
             </div>
         </section>
+        <!-- トークン表示（ステータスパネル下） -->
+        <div id="token-status-display" class="token-status-display hidden"></div>
 
         <!-- メインコンテンツ -->
         <main class="game-main">
@@ -79,6 +97,10 @@
                 <h2>研修: カード習得</h2>
                 <p class="instruction">3枚から1枚を選んで習得してください<span class="help-longpress">[長押しで詳細]</span></p>
                 <div id="training-cards" class="card-selection"></div>
+                <div id="training-refresh-row" class="hidden">
+                    <button id="btn-training-refresh" class="btn-secondary">🔄 リフレッシュ</button>
+                    <span id="training-refresh-count"></span>
+                </div>
                 <button id="confirm-training" class="btn-primary" disabled>習得を確定</button>
             </section>
 
@@ -86,6 +108,11 @@
             <section id="action-area" class="phase-area hidden">
                 <h2>教室行動: カード配置</h2>
                 <p class="instruction">手札から3枚を選び、スタッフに配置してください</p>
+                <div id="draw-notification" class="draw-notification hidden"></div>
+
+                <div class="slot-mode-row">
+                    <button id="btn-slot-manual" class="btn-slot-toggle" title="手動でスロットを指定して配置します">⊞ スロット指定</button>
+                </div>
 
                 <!-- スタッフ配置エリア -->
                 <div class="staff-area">
@@ -112,6 +139,7 @@
                 <!-- 手札エリア -->
                 <div class="hand-area">
                     <h3>手札</h3>
+                    <div id="token-display" class="token-display hidden"></div>
                     <div id="hand-cards" class="card-list"></div>
                 </div>
 
@@ -122,6 +150,7 @@
             <section id="meeting-area" class="phase-area hidden">
                 <h2>教室会議: カード削除</h2>
                 <p class="instruction">デッキから最大<span id="delete-count">0</span>枚削除できます</p>
+                <div id="organize-bonus-info" class="organize-bonus-info hidden"></div>
                 <div id="deck-cards" class="card-list"></div>
                 <div class="selected-info">
                     選択中: <span id="selected-count">0</span> / <span id="max-delete">0</span>
@@ -161,6 +190,23 @@
                 <h1>カードで学習塾</h1>
                 <h2>春期講習編</h2>
                 <p>学習塾の室長となり、8ターンで最高の成果を目指そう！</p>
+
+                <!-- 難易度選択 -->
+                <div class="difficulty-selector">
+                    <div class="difficulty-label">難易度を選択</div>
+                    <div class="difficulty-buttons">
+                        <button id="btn-difficulty-fresh" class="difficulty-btn selected" data-difficulty="fresh">
+                            <span class="difficulty-name">FRESH</span>
+                            <span class="difficulty-desc">基本難易度</span>
+                            <span id="fresh-tooltip" class="fresh-tooltip hidden">初めての方は<br>こちらに挑戦</span>
+                        </button>
+                        <button id="btn-difficulty-pro" class="difficulty-btn" data-difficulty="pro">
+                            <span class="difficulty-name">PRO</span>
+                            <span class="difficulty-desc">上級難易度</span>
+                        </button>
+                    </div>
+                </div>
+
                 <button id="start-game" class="btn-primary btn-large">ゲーム開始</button>
                 <div class="title-links">
                     <a id="link-tutorial" class="title-link-btn" href="tutorial.html">
@@ -185,29 +231,49 @@
                         <span class="anim-label">体験</span>
                         <span id="anim-exp-value" class="anim-value">0</span>
                         <span id="anim-exp-delta" class="anim-delta"></span>
+                        <div id="anim-exp-rank" class="status-rank-info">
+                            <span class="rank-label"></span>
+                            <div class="rank-progress"><div class="rank-progress-fill"></div></div>
+                            <span class="rank-deficit hidden"></span>
+                        </div>
                     </div>
                     <div class="anim-stat anim-enr">
                         <span class="anim-label">入塾</span>
                         <span id="anim-enr-value" class="anim-value">0</span>
                         <span id="anim-enr-delta" class="anim-delta"></span>
+                        <div id="anim-enr-rank" class="status-rank-info">
+                            <span class="rank-label"></span>
+                            <div class="rank-progress"><div class="rank-progress-fill"></div></div>
+                            <span class="rank-deficit hidden"></span>
+                        </div>
                     </div>
                     <div class="anim-stat anim-sat">
                         <span class="anim-label">満足</span>
                         <span id="anim-sat-value" class="anim-value">0</span>
                         <span id="anim-sat-delta" class="anim-delta"></span>
+                        <div id="anim-sat-rank" class="status-rank-info">
+                            <span class="rank-label"></span>
+                            <div class="rank-progress"><div class="rank-progress-fill"></div></div>
+                            <span class="rank-deficit hidden"></span>
+                        </div>
                     </div>
                     <div class="anim-stat anim-acc">
                         <span class="anim-label">経理</span>
                         <span id="anim-acc-value" class="anim-value">0</span>
                         <span id="anim-acc-delta" class="anim-delta"></span>
+                        <div id="anim-acc-rank" class="status-rank-info">
+                            <span class="rank-label"></span>
+                            <div class="rank-progress"><div class="rank-progress-fill"></div></div>
+                            <span class="rank-deficit hidden"></span>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- JavaScriptモジュール（キャッシュバスター付き v20260220-2350） -->
-    <script type="module" src="js/main.js?v=20260220-2350"></script>
+    <!-- JavaScriptモジュール（キャッシュバスター付き v20260411-0900） -->
+    <script type="module" src="js/main.js?v=20260411-0900"></script>
 </body>
 
 </html>
