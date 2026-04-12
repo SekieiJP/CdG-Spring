@@ -364,9 +364,9 @@ export function explainTopChoice(input = {}) {
 }
 
 if (typeof window !== 'undefined') {
-    window.cdgAssist = {
+    window.cdgAssist = Object.assign({}, window.cdgAssist || {}, {
         recommendTrainingCard,
         recommendCardName,
         explainTopChoice
-    };
+    });
 }

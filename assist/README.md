@@ -1,11 +1,15 @@
 # Training Advisor (Game Assist)
 
 `trainingAdvisor.js` は、現在ターン・ステータス・研修候補からおすすめ取得カードを返す補助モジュールです。
+`deleteAdvisor.js` は、現在ターン・ステータス・デッキ状況からおすすめ削除カードを返す補助モジュールです。
 
 ## Export
 - `recommendTrainingCard(input)`
 - `recommendCardName(input)`
 - `explainTopChoice(input)`
+- `recommendDeleteCards(input)`
+- `recommendDeleteCardName(input)`
+- `explainDeleteChoice(input)`
 
 ## Input
 ```js
@@ -48,6 +52,10 @@ import {
   recommendTrainingCard,
   explainTopChoice
 } from './assist/trainingAdvisor.js';
+import {
+  recommendDeleteCards,
+  explainDeleteChoice
+} from './assist/deleteAdvisor.js';
 
 const advisorInput = {
   difficulty: 'pro',
@@ -66,9 +74,30 @@ const result = recommendTrainingCard(advisorInput);
 
 console.log(result.recommendedCardName);
 console.log(explainTopChoice(advisorInput));
+
+const deleteInput = {
+  difficulty: 'pro',
+  strategyProfile: 'stable',
+  deletePolicy: 'n_only', // optional: 'normal' | 'n_only'
+  turn: game.gameState.turn,
+  deleteMax: game.turnManager.getCurrentDeleteMax(),
+  status: {
+    experience: game.gameState.player.experience,
+    enrollment: game.gameState.player.enrollment,
+    satisfaction: game.gameState.player.satisfaction,
+    accounting: game.gameState.player.accounting
+  },
+  deck: game.gameState.player.deck,
+  cardLookup: buildCardLookup(game.cardManager.allCards || [])
+};
+
+const deleteResult = recommendDeleteCards(deleteInput);
+console.log(deleteResult.recommendedDeleteCardNames);
+console.log(explainDeleteChoice(deleteInput));
 ```
 
 ## Integration Notes
 - 研修候補表示直後に呼び出して、推薦1位カードにバッジを付与する運用を想定。
+- 会議フェーズ表示時に呼び出して、削除候補カードに「削除おすすめ」バッジを付与する運用を想定。
 - PROの重みは `solver/autoplay-agent.mjs` の優秀方略（現時点は stable 寄り）をベースにしている。
 - 将来は solver 側重みをJSON化し、アシストと共通化する。

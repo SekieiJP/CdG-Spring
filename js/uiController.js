@@ -369,17 +369,31 @@ export class UIController {
             <div class="card-effect">${this._escapeHTML(displayEffect)}</div>
         `;
 
-        // 長押しで詳細効果を表示（短縮表示時のみ）
-        if (this.isShortCardDesc() && options.compact && card.topEffect && card.effect !== card.topEffect) {
-            let pressTimer;
-            cardDiv.addEventListener('touchstart', (e) => {
-                pressTimer = setTimeout(() => {
-                    this.showEffectTooltip(card, e);
-                }, 500);
-            });
-            cardDiv.addEventListener('touchend', () => clearTimeout(pressTimer));
-            cardDiv.addEventListener('touchmove', () => clearTimeout(pressTimer));
-        }
+        // スマホ長押し/PCホバー: カード直下フローティング（showHoverTooltip）
+        let pressTimer;
+        cardDiv.addEventListener('touchstart', (e) => {
+            pressTimer = setTimeout(() => { this.showHoverTooltip(card, cardDiv); }, 500);
+        });
+        cardDiv.addEventListener('touchend', () => {
+            clearTimeout(pressTimer);
+            const hover = document.querySelector('.hover-tooltip');
+            if (hover) hover.remove();
+        });
+        cardDiv.addEventListener('touchmove', () => clearTimeout(pressTimer));
+
+        // PC向けマウスオーバー: フローティング表示（showHoverTooltip）
+        let hoverTimer;
+        cardDiv.addEventListener('mouseenter', () => {
+            clearTimeout(this._hoverHideTimer);
+            hoverTimer = setTimeout(() => { this.showHoverTooltip(card, cardDiv); }, 500);
+        });
+        cardDiv.addEventListener('mouseleave', () => {
+            clearTimeout(hoverTimer);
+            this._hoverHideTimer = setTimeout(() => {
+                const hover = document.querySelector('.hover-tooltip');
+                if (hover) hover.remove();
+            }, 500);
+        });
 
         return cardDiv;
     }
@@ -388,18 +402,73 @@ export class UIController {
      * 効果詳細ツールチップ表示
      */
     showEffectTooltip(card, event) {
-        // 既存のツールチップを削除
         const existing = document.querySelector('.effect-tooltip');
         if (existing) existing.remove();
-
+        const tokenDefs = [
+            { keyword: '情熱', label: '情熱✊', desc: '次の行動フェーズのドロー+1枚' },
+            { keyword: '発想', label: '発想💡', desc: '次の研修フェーズで追加習得+1回' },
+            { keyword: '整理', label: '整理🗑️', desc: '次の会議フェーズのカード削除上限+1枚' },
+            { keyword: '疲労', label: '疲労💤', desc: '次の行動フェーズのドロー-1枚' },
+            { keyword: '並行', label: '並行🤹', desc: '既にカードが配置されたスタッフにも重ねて配置できる' },
+        ];
+        const effect = card.effect || '';
+        const matchedTokens = tokenDefs.filter(t => effect.includes(t.keyword));
+        const tokensHTML = matchedTokens.length > 0
+            ? '<div class="tooltip-tokens"><div class="tooltip-tokens-title">トークン効果</div>' +
+              matchedTokens.map(t => '<div class="tooltip-token-item">' + t.label + ' — ' + t.desc + '</div>').join('') +
+              '</div>'
+            : '';
         const tooltip = document.createElement('div');
         tooltip.className = 'effect-tooltip';
-        tooltip.innerHTML = `
-            <div class="tooltip-title">${this._escapeHTML(card.cardName)}</div>
-            <div class="tooltip-effect">${this._escapeHTML(card.effect)}</div>
-            <div class="tooltip-close">タップで閉じる</div>
-        `;
+        tooltip.innerHTML =
+            '<div class="tooltip-title">' + this._escapeHTML(card.cardName) + '</div>' +
+            '<div class="tooltip-effect">' + this._escapeHTML(effect) + '</div>' +
+            tokensHTML +
+            '<div class="tooltip-close">タップ/クリックで閉じる</div>';
         tooltip.addEventListener('click', () => tooltip.remove());
+        document.body.appendChild(tooltip);
+    }
+
+    /**
+     * PCマウスオーバー用フローティングツールチップ（カード下隣に表示）
+     */
+    showHoverTooltip(card, cardDiv) {
+        // 既存のhover-tooltipを削除
+        const existing = document.querySelector('.hover-tooltip');
+        if (existing) existing.remove();
+
+        // トークン検出
+        const tokenDefs = [
+            { keyword: '情熱', label: '情熱✊', desc: '次の行動フェーズのドロー+1枚' },
+            { keyword: '発想', label: '発想💡', desc: '次の研修フェーズで追加習得+1回' },
+            { keyword: '整理', label: '整理🗑️', desc: '次の会議フェーズのカード削除上限+1枚' },
+            { keyword: '疲労', label: '疲労💤', desc: '次の行動フェーズのドロー-1枚' },
+            { keyword: '並行', label: '並行🤹', desc: '既にカードが配置されたスタッフにも重ねて配置できる' },
+        ];
+        const effect = card.effect || '';
+        const matchedTokens = tokenDefs.filter(t => effect.includes(t.keyword));
+
+        // 仕様3: トークンなし かつ カード説明「全文」設定 → 表示しない
+        if (matchedTokens.length === 0 && !this.isShortCardDesc()) return;
+
+        const tokensHTML = matchedTokens.length > 0
+            ? '<div class="tooltip-tokens"><div class="tooltip-tokens-title">トークン効果</div>' +
+              matchedTokens.map(t => '<div class="tooltip-token-item">' + t.label + ' — ' + t.desc + '</div>').join('') +
+              '</div>'
+            : '';
+
+        const tooltip = document.createElement('div');
+        tooltip.className = 'hover-tooltip';
+        tooltip.innerHTML =
+            '<div class="tooltip-title">' + this._escapeHTML(card.cardName) + '</div>' +
+            '<div class="tooltip-effect">' + this._escapeHTML(effect) + '</div>' +
+            tokensHTML;
+
+        // カードの下隣に位置を設定
+        const rect = cardDiv.getBoundingClientRect();
+        tooltip.style.left = rect.left + 'px';
+        tooltip.style.top = (rect.bottom + 4) + 'px';
+
         document.body.appendChild(tooltip);
     }
 
@@ -508,7 +577,7 @@ export class UIController {
 
         const instruction = document.querySelector('#training-area .instruction');
         if (instruction) {
-            const helpText = this.isShortCardDesc() ? '<span class="help-longpress">[長押しで詳細]</span>' : '';
+            const helpText = '<span class="help-longpress">[長押しで詳細]</span>';
             if (this.gameState.turn === 0) {
                 instruction.innerHTML = `初回研修: 4枚から2枚を選んで習得してください${helpText}`;
             } else {
@@ -1667,7 +1736,7 @@ export class UIController {
 
         const instruction = document.querySelector('#training-area .instruction');
         if (instruction) {
-            const helpText = this.isShortCardDesc() ? '<span class="help-longpress">[長押しで詳細]</span>' : '';
+            const helpText = '<span class="help-longpress">[長押しで詳細]</span>';
             instruction.innerHTML = `3枚から1枚を選んで習得してください${helpText}`;
         }
     }
@@ -1847,7 +1916,7 @@ export class UIController {
 
         const instruction = document.querySelector('#training-area .instruction');
         if (instruction) {
-            const helpText = this.isShortCardDesc() ? '<span class="help-longpress">[長押しで詳細]</span>' : '';
+            const helpText = '<span class="help-longpress">[長押しで詳細]</span>';
             instruction.innerHTML = `💡 発想追加習得 (残り${this.inspirationRemaining}回): SRカード3枚から1枚を選んで習得してください${helpText}`;
         }
 
@@ -2615,7 +2684,7 @@ export class UIController {
             if (confirmBtn) confirmBtn.disabled = true;
             const instruction = document.querySelector('#training-area .instruction');
             if (instruction) {
-                const helpText = this.isShortCardDesc() ? '<span class="help-longpress">[長押しで詳細]</span>' : '';
+                const helpText = '<span class="help-longpress">[長押しで詳細]</span>';
                 instruction.innerHTML = `💡 発想追加習得 (残り${this.inspirationRemaining}回): SRカード3枚から1枚を選んで習得してください${helpText}`;
             }
             this.updateTrainingRefreshUI('SR');
@@ -2689,7 +2758,6 @@ export class UIController {
                         <button class="font-toggle-option${currentFontMode === 'small' ? ' active' : ''}" data-mode="small">小さめ</button>
                         <button class="font-toggle-option${currentFontMode === 'normal' ? ' active' : ''}" data-mode="normal">標準</button>
                     </div>
-                    <p class="font-toggle-note">変更した文字サイズは次回再読み込み時に適用されます</p>
                 </div>
                 <div class="settings-section">
                     <h3>カード説明</h3>
@@ -2697,7 +2765,7 @@ export class UIController {
                         <button class="font-toggle-option${currentCardDesc === 'full' ? ' active' : ''}" data-card-desc="full">全文</button>
                         <button class="font-toggle-option${currentCardDesc === 'short' ? ' active' : ''}" data-card-desc="short">短縮</button>
                     </div>
-                    <p class="font-toggle-note">短縮表示時は長押しで全文を確認できます</p>
+                    <p class="font-toggle-note">短縮表示時は長押しで全文を確認できます。設定は次回再読み込み時に適用</p>
                 </div>
                 <div class="settings-section">
                     <h3>リンク</h3>
