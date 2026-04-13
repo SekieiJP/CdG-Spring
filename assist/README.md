@@ -15,7 +15,7 @@
 ```js
 {
   difficulty: 'pro' | 'fresh',
-  strategyProfile: 'stable' | 'smax' | 'upside', // optional, default: 'stable'
+  strategyProfile: 'strategic1_stable' | 'strategic1' | 'strategic1_upside', // optional, default: 'strategic1_stable'
   turn: 0..7,
   status: {
     experience: number,
@@ -99,5 +99,8 @@ console.log(explainDeleteChoice(deleteInput));
 ## Integration Notes
 - 研修候補表示直後に呼び出して、推薦1位カードにバッジを付与する運用を想定。
 - 会議フェーズ表示時に呼び出して、削除候補カードに「削除おすすめ」バッジを付与する運用を想定。
-- PROの重みは `solver/autoplay-agent.mjs` の優秀方略（現時点は stable 寄り）をベースにしている。
+- `strategyProfile` は互換のため `stable/smax/upside` も受理し、それぞれ `strategic1_stable/strategic1/strategic1_upside` に内部変換される。
+- PROの重みは `solver/autoplay-agent.mjs` の `pro_strategic1_stable` 準拠（2026-04-13 時点のA+率同期）をベースにしている。
+- PROの評価閾値は `rankPro.csv` 準拠で `S: points>=12`, `A+: points>=10` を用いる。
+- Assist同期ポリシーは「A+率（points>=10）主指標 + S率（points>=12）を安全指標」で判定する。
 - 将来は solver 側重みをJSON化し、アシストと共通化する。

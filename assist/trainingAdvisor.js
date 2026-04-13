@@ -13,7 +13,10 @@ const PRO_POSITIVE_NAME_BIAS = {
     '今だけ！体験生特典': 0.95,
     '備品注文': 0.7,
     '教室清掃': 0.5,
-    '未入金家庭へ電話': 0.45
+    '未入金家庭へ電話': 0.45,
+    '友人紹介': 0.5,
+    '進学相談フェア出展': 0.45,
+    '努力の結晶 合格実績掲示': 0.4
 };
 
 const PRO_NEGATIVE_NAME_BIAS = {
@@ -25,6 +28,24 @@ const PRO_NEGATIVE_NAME_BIAS = {
 
 function safeInt(value) {
     return Number.isFinite(value) ? value : 0;
+}
+
+function normalizeStrategyProfile(difficulty = 'pro', profile = '') {
+    if (difficulty === 'fresh') return 'fresh_default';
+    const normalized = String(profile || '').trim().toLowerCase();
+    const aliasMap = {
+        stable: 'strategic1_stable',
+        smax: 'strategic1',
+        upside: 'strategic1_upside',
+        pro_stable: 'strategic1_stable',
+        pro_strategic1: 'strategic1',
+        pro_strategic1_stable: 'strategic1_stable',
+        pro_strategic1_upside: 'strategic1_upside',
+        strategic1: 'strategic1',
+        strategic1_stable: 'strategic1_stable',
+        strategic1_upside: 'strategic1_upside'
+    };
+    return aliasMap[normalized] || 'strategic1_stable';
 }
 
 function normalizeStatus(status = {}) {
@@ -47,6 +68,7 @@ function buildProNeeds(status) {
         enrollmentDiff,
         experienceNeed: Math.max(40 - status.experience, 0),
         enrollmentDiffNeed: Math.max(32 - enrollmentDiff, 0),
+        enrollmentDiffNeed40: Math.max(40 - enrollmentDiff, 0),
         accountingNeed: Math.max(15 - status.accounting, 0),
         satisfactionNeed: Math.max(15 - status.satisfaction, 0),
         satisfactionBridgeNeed: Math.max(25 - status.satisfaction, 0),
@@ -107,8 +129,10 @@ function hasToken(effectText = '', token) {
     return effectText.includes(token);
 }
 
-function getProNameBias(card, needs, turn, profile = 'stable') {
-    const isSmax = profile === 'smax';
+function getProNameBias(card, needs, turn, profile = 'strategic1_stable') {
+    const isStrategic1 = profile === 'strategic1' || profile === 'strategic1_stable' || profile === 'strategic1_upside';
+    const isStrategic1Stable = profile === 'strategic1_stable';
+    const isStrategic1Upside = profile === 'strategic1_upside';
     const name = card.cardName;
     let bias = 0;
 
@@ -140,10 +164,10 @@ function getProNameBias(card, needs, turn, profile = 'stable') {
         if (needs.satisfactionNeed > 0 && needs.accountingNeed > 1) bias -= 0.55;
         else bias += 0.45;
     }
-    if (isSmax && name === '学力確認＆向上 公開模試' && needs.accountingNeed <= 2) {
+    if (isStrategic1 && name === '学力確認＆向上 公開模試' && needs.accountingNeed <= 2) {
         bias += 0.35;
     }
-    if (isSmax && name === '今だけ！体験生特典' && needs.accountingNeed <= 1) {
+    if (isStrategic1 && name === '今だけ！体験生特典' && needs.accountingNeed <= 1) {
         bias += 0.25;
     }
     if (name === '未入金家庭へ電話' && needs.satisfactionNeed > 0) {
@@ -156,6 +180,27 @@ function getProNameBias(card, needs, turn, profile = 'stable') {
     }
     if (name === '生徒面談の基本' && needs.satisfactionNeed <= 0) {
         bias -= 0.4 + Math.min(needs.satisfactionExcess * 0.1, 0.8);
+    }
+    if (isStrategic1 && name === '学力確認＆向上 公開模試') {
+        bias += 1.0;
+        if (turn >= 5 && needs.enrollmentDiffNeed40 > 0) bias += 1.0;
+        if (needs.accountingNeed > 2) bias -= isStrategic1Stable ? 0.7 : 0.4;
+    }
+    if (isStrategic1 && name === '締切間近の書類リマインド') {
+        bias += turn <= 5 ? 1.0 : 0.35;
+    }
+    if (isStrategic1 && name === '笑顔伝わる教室通信') {
+        if (turn >= 2 && turn <= 5 && needs.satisfactionNeed > 0) bias += 0.85;
+        if (turn >= 6) bias -= 0.35;
+    }
+    if (isStrategic1 && name === '提出書類ファイリング') {
+        bias += turn <= 4 ? 0.8 : 0.2;
+    }
+    if (isStrategic1 && name === '質問対応の基本' && turn <= 2) {
+        bias -= 1.0;
+    }
+    if (isStrategic1Upside && card.rarity === 'SSR') {
+        bias += 0.2;
     }
 
     return bias;
@@ -176,31 +221,34 @@ function getFreshNameBias(card, needs) {
 function scoreProCard(card, context, reasonTags) {
     const needs = buildProNeeds(context.status);
     const turn = context.turn;
-    const profile = context.profile || 'stable';
-    const isSmax = profile === 'smax';
-    const isUpside = profile === 'upside';
+    const profile = context.profile || 'strategic1_stable';
+    const isStrategic1 = profile === 'strategic1' || profile === 'strategic1_stable' || profile === 'strategic1_upside';
+    const isStrategic1Stable = profile === 'strategic1_stable';
+    const isStrategic1Upside = profile === 'strategic1_upside';
     let score = 0;
 
     if (card.category === '動員') {
         score += needs.experienceNeed > 0 ? 0.9 + Math.min(needs.experienceNeed / 20, 2.0) : 0.2;
         if (turn >= 6 && needs.experienceNeed > 0) score += 0.8;
-        if (isSmax) score += 0.45;
-        if (isUpside) score += 0.5;
+        if (isStrategic1) score += 0.35;
+        if (isStrategic1Upside) score += 0.4;
         reasonTags.push('exp');
     } else if (card.category === '教務') {
         score += needs.enrollmentDiffNeed > 0 ? 1.2 + Math.min(needs.enrollmentDiffNeed / 14, 2.2) : 0.2;
         if (turn >= 5 && needs.enrollmentDiffNeed > 0) score += 0.9;
-        if (isSmax) score += 0.65;
-        if (isUpside) score += 0.55;
+        if (isStrategic1) score += 0.75;
+        if (turn >= 5 && needs.enrollmentDiffNeed40 > 0) score += 1.0;
+        if (isStrategic1Upside) score += 0.35;
         reasonTags.push('diff');
     } else if (card.category === '庶務') {
         score += needs.accountingNeed > 0 ? 1.1 + Math.min(needs.accountingNeed / 8, 2.0) : 0.1;
         if (needs.accountingExcess > 0) score -= Math.min(needs.accountingExcess * 0.2, 1.2);
+        if (isStrategic1Stable && needs.accountingNeed > 0) score += 0.25;
         reasonTags.push('acc');
     } else if (card.category === '応対') {
         score += needs.satisfactionNeed > 0 ? 1.0 + Math.min(needs.satisfactionNeed / 8, 1.8) : 0;
         const stableBridgeMode =
-            profile === 'stable' &&
+            isStrategic1Stable &&
             needs.withdrawal <= 1 &&
             needs.satisfactionBridgeNeed > 0 &&
             needs.satisfactionBridgeNeed <= 8 &&
@@ -214,8 +262,8 @@ function scoreProCard(card, context, reasonTags) {
         reasonTags.push('risk');
     }
 
-    if (card.rarity === 'SSR') score += isUpside ? 1.1 : isSmax ? 1.05 : 0.75;
-    else if (card.rarity === 'SR') score += isSmax ? 0.55 : 0.4;
+    if (card.rarity === 'SSR') score += isStrategic1Upside ? 1.1 : isStrategic1 ? 0.95 : 0.75;
+    else if (card.rarity === 'SR') score += isStrategic1 ? 0.5 : 0.4;
     else if (card.rarity === 'N' && turn >= 3) score -= 0.6;
 
     if (needs.withdrawal >= 2 && (card.category === '庶務' || card.category === '応対')) {
@@ -227,13 +275,26 @@ function scoreProCard(card, context, reasonTags) {
     if (hasToken(card.effect, '情熱')) score += turn <= 4 ? 1.0 : 0.6;
     if (hasToken(card.effect, '整理')) score += turn >= 3 ? 0.8 : 0.3;
     if (hasToken(card.effect, '疲労')) score -= 1.1;
-    if (hasToken(card.effect, '並行')) score += 0.5;
+    if (hasToken(card.effect, '並行')) score += isStrategic1 ? 0.7 : 0.5;
+    if (hasToken(card.effect, '発想') && hasToken(card.effect, '並行')) score += isStrategic1 ? 0.35 : 0.1;
+    if (hasToken(card.effect, '情熱') && hasToken(card.effect, '並行')) score += isStrategic1 ? 0.25 : 0;
     if (needs.accountingNeed > 0) {
-        if (card.effect.includes('経-2')) score -= isSmax ? 0.9 : 1.3;
-        else if (card.effect.includes('経-1')) score -= isSmax ? 0.45 : 0.85;
+        const accountingPenaltyScale = isStrategic1Stable ? 0.78 : isStrategic1 ? 0.72 : 1;
+        if (card.effect.includes('経-2')) score -= (isStrategic1 ? 0.9 : 1.3) * accountingPenaltyScale;
+        else if (card.effect.includes('経-1')) score -= (isStrategic1 ? 0.45 : 0.85) * accountingPenaltyScale;
     }
     if (hasToken(card.effect, '疲労') && turn >= 6) {
         score += 0.9;
+    }
+    if (isStrategic1) {
+        if (turn <= 2 && card.category === '動員') score += 1.15;
+        if (turn <= 2 && card.category === '教務') score -= 0.35;
+        if (turn >= 2 && turn <= 4 && card.category === '応対') score += needs.satisfactionNeed > 0 ? 1.0 : -0.3;
+        if (turn >= 5 && card.category === '教務') score += 1.2;
+        if (turn >= 5 && needs.enrollmentDiffNeed40 > 0 && card.category === '教務') score += 0.65;
+        if (isStrategic1Stable && turn >= 5 && card.category === '教務') score += 0.45;
+        if (isStrategic1Stable && needs.accountingNeed <= 0 && card.category === '庶務') score -= 0.15;
+        if (turn >= 6 && card.category === '応対' && needs.satisfactionNeed <= 0) score -= 0.6;
     }
 
     score += getProNameBias(card, needs, turn, profile);
@@ -287,11 +348,7 @@ function buildSummary(top, needs, difficulty) {
 
 export function recommendTrainingCard(input = {}) {
     const difficulty = input.difficulty === 'fresh' ? 'fresh' : 'pro';
-    const strategyProfile = input.strategyProfile === 'smax'
-        ? 'smax'
-        : input.strategyProfile === 'upside'
-            ? 'upside'
-            : 'stable';
+    const strategyProfile = normalizeStrategyProfile(difficulty, input.strategyProfile);
     const turn = Math.max(0, Math.min(7, safeInt(input.turn)));
     const status = normalizeStatus(input.status || {});
     const cardLookup = input.cardLookup || {};
