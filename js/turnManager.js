@@ -3,13 +3,13 @@
  */
 export class TurnManager {
     static TURN_CONFIG = [
-        { name: '1月下旬', week: '1月下旬', training: 'R', recommended: '動員', recommendedStatus: 'experience', delete: 2 },
-        { name: '2月上旬', week: '2月上旬', training: 'SR', recommended: '応対', recommendedStatus: 'satisfaction', delete: 2 },
-        { name: '2月下旬', week: '2月下旬', training: 'R', recommended: '動員', recommendedStatus: 'experience', delete: 1 },
-        { name: '3月上旬', week: '3月上旬', training: 'SSR', recommended: '庶務', recommendedStatus: 'accounting', delete: 1 },
-        { name: '3月下旬', week: '3月下旬', training: 'SSR', recommended: '教務', recommendedStatus: 'enrollment', delete: 1 },
-        { name: '4月上旬', week: '4月上旬', training: 'SR', recommended: '応対', recommendedStatus: 'satisfaction', delete: 1 },
-        { name: '4月下旬', week: '4月下旬', training: 'SR', recommended: '教務', recommendedStatus: 'enrollment', delete: 1 },
+        { name: '1月下旬', week: '1月下旬', training: 'R', recommended: '動員', recommendedStatus: 'experience', delete: 1 },
+        { name: '2月上旬', week: '2月上旬', training: 'SR', recommended: '応対', recommendedStatus: 'satisfaction', delete: 1 },
+        { name: '2月下旬', week: '2月下旬', training: 'SSR', recommended: '動員', recommendedStatus: 'experience', delete: 1 },
+        { name: '3月上旬', week: '3月上旬', training: 'R', recommended: '庶務', recommendedStatus: 'accounting', delete: 1 },
+        { name: '3月下旬', week: '3月下旬', training: 'SSR', recommended: '教務', recommendedStatus: 'enrollment', delete: 0 },
+        { name: '4月上旬', week: '4月上旬', training: 'SR', recommended: '応対', recommendedStatus: 'satisfaction', delete: 0 },
+        { name: '4月下旬', week: '4月下旬', training: 'SR', recommended: '教務', recommendedStatus: 'enrollment', delete: 0 },
         { name: '5月上旬', week: '5月上旬', training: 'SR', recommended: '庶務', recommendedStatus: 'accounting', delete: 0 }
     ];
 
@@ -63,6 +63,8 @@ export class TurnManager {
             // 最終ターン(turn===7)は会議スキップ。それ以外はmaxDelete>0なら開く
             if (maxDelete === 0 || this.gameState.turn === 7) {
                 this.logger?.log('[DEBUG] 会議フェーズをスキップして次ターンへ遷移', 'info');
+                this.gameState.returnAllToDeck(); // 手札・配置カードをデッキへ戻す
+                this.gameState.tokens.organize = 0; // 整理トークンをリセット（最終ターンで残存する可能性あり）
                 this.gameState.phase = 'meeting'; // 一時的にmeetingへ
                 this.advancePhase(); // 即座に次のターンへ
             } else {
@@ -198,7 +200,7 @@ export class TurnManager {
                         recommendedApplied = true;
                     }
 
-                    this.cardManager.applyCardEffect(card, staff, this.gameState);
+                    this.cardManager.applyCardEffect(card, staff, this.gameState, beforeStats);
 
                     const afterStats = {
                         experience: this.gameState.player.experience,

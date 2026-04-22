@@ -298,6 +298,27 @@ body {
     opacity: 0.5;
 }
 
+.card.skip-option {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed var(--color-border);
+    background: transparent;
+    color: var(--color-text-secondary);
+}
+
+.card.skip-option.selected {
+    border-color: var(--color-primary);
+    background: var(--color-bg-light);
+    color: var(--color-text);
+}
+
+.skip-option-label {
+    font-size: 0.9em;
+    font-weight: bold;
+    text-align: center;
+}
+
 .card-header {
     display: flex;
     justify-content: space-between;
@@ -1716,27 +1737,15 @@ html.font-normal .compact-stats {
         transform: translateX(-50%) translateY(-4px);
     }
 }
-/* 研修リフレッシュ行 */
-#training-refresh-row {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    gap: 8px;
-    margin: 8px 0 4px;
-}
-
-#training-refresh-row.hidden {
+#btn-training-skip.hidden,
+#btn-training-refresh.hidden {
     display: none;
 }
 
-#training-refresh-count {
-    background-color: #6b1a2a;
-    color: #f5c6ce;
-    font-size: 0.78rem;
-    font-weight: bold;
-    padding: 3px 10px;
-    border-radius: 12px;
-    white-space: nowrap;
+.refresh-count-label {
+    font-size: 0.75em;
+    opacity: 0.85;
+    margin-top: 2px;
 }
 
 /* ===== ドロー変動通知 ===== */
@@ -1855,4 +1864,44 @@ html.font-normal .compact-stats {
 
 .rank-deficit.hidden {
     display: none;
+}
+
+/* ===== 研修フェーズ: 取得しない/リフレッシュ 横並びレイアウト ===== */
+.training-action-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.training-action-row > button {
+    flex: 1;
+    min-width: 0;
+    line-height: 1.3;
+}
+
+/* ===== スタート画面: 祝福テキスト ===== */
+.celebration-text {
+    font-size: 0.85rem;
+    font-weight: bold;
+    color: #F97316;
+    margin-bottom: var(--spacing-xs);
+    letter-spacing: 0.05em;
+}
+
+/* ===== 結果画面: ビルド情報行 ===== */
+.result-build-info-row td {
+    text-align: right;
+    padding-top: 6px;
+}
+.result-build-info {
+    color: #999;
+    font-size: 0.72em;
+    word-break: break-all;
+}
+
+/* ===== 結果画面: ベスト更新バッジ ===== */
+.best-update-badge {
+    color: #e63;
+    font-size: 1.1em;
+    margin-top: 4px;
 }

@@ -1,4 +1,4 @@
-import { submitScore } from './scoreSubmitter.js?v=20260411-0900';
+import { submitScore, getOrCreateUserUUID } from './scoreSubmitter.js?v=20260423-0034';
 
 /**
  * UIController - UI操作・表示制御
@@ -35,6 +35,7 @@ export class UIController {
      * UI初期化
      */
     init() {
+        getOrCreateUserUUID(); // 結果画面表示より前にCookieを確定
         this.updateStatusDisplay();
         this.updateTurnDisplay();
 
@@ -92,6 +93,8 @@ export class UIController {
         // 研修確定ボタン
         const confirmTrainingBtn = document.getElementById('confirm-training');
         confirmTrainingBtn?.addEventListener('click', () => this.onConfirmTraining());
+        const skipTrainingBtn = document.getElementById('btn-training-skip');
+        skipTrainingBtn?.addEventListener('click', () => this.skipInspirationTraining());
         const refreshTrainingBtn = document.getElementById('btn-training-refresh');
         refreshTrainingBtn?.addEventListener('click', () => this.onTrainingRefresh());
 
@@ -544,6 +547,8 @@ export class UIController {
     renderTrainingCards(trainingCards) {
         const container = document.getElementById('training-cards');
         if (!container) return;
+        const skipBtn = document.getElementById('btn-training-skip');
+        if (skipBtn) skipBtn.classList.add('hidden');
 
         container.innerHTML = '';
 
@@ -1716,6 +1721,10 @@ export class UIController {
         const container = document.getElementById('training-cards');
         if (!container) return;
 
+        // 発想フロー以外では「取得しない」ボタンを非表示
+        const skipBtnTp = document.getElementById('btn-training-skip');
+        if (skipBtnTp) skipBtnTp.classList.add('hidden');
+
         container.innerHTML = '';
         this.selectedTrainingCard = null;
         // Spec2修正: 1枚選択するまで確定ボタンを無効化
@@ -1800,21 +1809,54 @@ export class UIController {
     }
 
     /**
+     * 発想追加習得の4択（3枚+取得しない）を描画
+     * @param {HTMLElement} container
+     * @param {Array} cards
+     */
+    renderInspirationTrainingChoices(container, cards) {
+        if (!container) return;
+
+        container.innerHTML = '';
+        cards.forEach(card => {
+            const cardElem = this.createCardElement(card, {
+                clickable: true,
+                compact: true,
+                onClick: (c, elem) => this.onTrainingCardSelect(c, elem, container)
+            });
+            container.appendChild(cardElem);
+        });
+
+        const skipOption = document.createElement('div');
+        skipOption.className = 'card compact-card skip-option';
+        skipOption.innerHTML = `
+            <div class="skip-option-label">取得しない</div>
+        `;
+        skipOption.addEventListener('click', () => {
+            container.querySelectorAll('.card').forEach(c => c.classList.remove('selected'));
+            skipOption.classList.add('selected');
+            this.selectedTrainingCard = { __skip: true };
+            const confirmBtn = document.getElementById('confirm-training');
+            if (confirmBtn) confirmBtn.disabled = false;
+        });
+        container.appendChild(skipOption);
+    }
+
+    /**
      * 研修リフレッシュボタンの表示状態を更新
      */
     updateTrainingRefreshUI(rarity) {
-        const row = document.getElementById('training-refresh-row');
+        const btn = document.getElementById('btn-training-refresh');
         const countElem = document.getElementById('training-refresh-count');
-        if (!row) return;
+        if (!btn) return;
 
         const remaining = this.gameState.trainingRefreshRemaining ?? 0;
         const enabled = this.gameState.difficulty === 'pro' && remaining > 0 && rarity !== 'N';
 
         if (enabled) {
-            row.classList.remove('hidden');
+            btn.classList.remove('hidden');
             if (countElem) countElem.textContent = `残り${remaining}回`;
         } else {
-            row.classList.add('hidden');
+            btn.classList.add('hidden');
         }
     }
 
@@ -1855,6 +1897,12 @@ export class UIController {
                     container.appendChild(cardElem);
                 });
                 // 初回研修は selectedInitialCards が2枚になるまで確定ボタン無効
+                const confirmBtn = document.getElementById('confirm-training');
+                if (confirmBtn) confirmBtn.disabled = true;
+            } else if (isInspiration) {
+                // 発想追加習得: 3枚 + 「取得しない」
+                this.selectedTrainingCard = null;
+                this.renderInspirationTrainingChoices(container, newCards);
                 const confirmBtn = document.getElementById('confirm-training');
                 if (confirmBtn) confirmBtn.disabled = true;
             } else {
@@ -1904,15 +1952,7 @@ export class UIController {
 
         const container = document.getElementById('training-cards');
         if (container) {
-            container.innerHTML = '';
-            candidates.forEach(card => {
-                const cardElem = this.createCardElement(card, {
-                    clickable: true,
-                    compact: true,
-                    onClick: (c, elem) => this.onTrainingCardSelect(c, elem, container)
-                });
-                container.appendChild(cardElem);
-            });
+            this.renderInspirationTrainingChoices(container, candidates);
         }
 
         const confirmBtn = document.getElementById('confirm-training');
@@ -1946,7 +1986,9 @@ export class UIController {
     confirmInspirationTraining() {
         if (!this.selectedTrainingCard) return;
 
-        this.gameState.addToDeck({ ...this.selectedTrainingCard });
+        if (this.selectedTrainingCard.__skip !== true) {
+            this.gameState.addToDeck({ ...this.selectedTrainingCard });
+        }
         this.selectedTrainingCard = null;
         this.inspirationRemaining -= 1;
 
@@ -1957,6 +1999,24 @@ export class UIController {
             this.gameState.tokens.inspiration = 0;
             this.trainingSelectionMode = 'normal';
             this.gameState.currentTrainingCards = null;
+            this.finalizeTrainingToAction();
+        }
+    }
+
+    /**
+     * 発想追加習得のスキップ
+     */
+    skipInspirationTraining() {
+        this.inspirationRemaining -= 1;
+        const skipBtn = document.getElementById('btn-training-skip');
+        if (this.inspirationRemaining > 0) {
+            this.gameState.tokens.inspiration = this.inspirationRemaining;
+            this.showInspirationTrainingRound();
+        } else {
+            this.gameState.tokens.inspiration = 0;
+            this.trainingSelectionMode = 'normal';
+            this.gameState.currentTrainingCards = null;
+            if (skipBtn) skipBtn.classList.add('hidden');
             this.finalizeTrainingToAction();
         }
     }
@@ -2042,6 +2102,9 @@ export class UIController {
                                 <td colspan="2">合計スコア</td>
                                 <td><strong>${score.displayScore}</strong></td>
                             </tr>
+                            <tr class="result-build-info-row">
+                                <td colspan="3" class="result-build-info">${this._buildInfoText()}</td>
+                            </tr>
                         </tbody>
                     </table>
                 `;
@@ -2050,11 +2113,22 @@ export class UIController {
 
         // ハイスコア保存・表示
         const difficulty = this.gameState.difficulty || 'fresh';
-        this.scoreManager.saveHighScore(score, difficulty);
+        const isNewHighScore = this.scoreManager.saveHighScore(score, difficulty);
         const highScore = this.scoreManager.getHighScore(difficulty);
         const highScoreElem = document.getElementById('high-score');
         if (highScoreElem && highScore) {
             highScoreElem.textContent = `${highScore.displayScore ?? highScore.points}ポイント`;
+        }
+        // 前回のバッジを除去してから新記録時のみ表示
+        const prevBadge = document.getElementById('best-update-badge');
+        if (prevBadge) prevBadge.remove();
+        if (isNewHighScore) {
+            const badge = document.createElement('p');
+            badge.id = 'best-update-badge';
+            badge.className = 'best-update-badge';
+            badge.innerHTML = '<strong>ベスト更新!!</strong>';
+            const highScoreDiv = document.querySelector('.high-score');
+            if (highScoreDiv) highScoreDiv.appendChild(badge);
         }
 
         // スコア自動送信（fire-and-forget）
@@ -2137,6 +2211,15 @@ export class UIController {
     }
 
     /**
+     * ビルドバージョンとユーザーUUIDを返す（結果画面用）
+     */
+    _buildInfoText() {
+        const ver = window.BUILD_VERSION || 'unknown';
+        const uuid = document.cookie.match(/(?:^|; )cdg_uuid=([^;]*)/)?.[1] || '?';
+        return `${ver} / ${uuid}`;
+    }
+
+    /**
      * PRO難易度の結果内訳テーブルを生成
      * @param {Object} score - calculateScorePro() の戻り値
      * @returns {string} HTML文字列
@@ -2182,6 +2265,9 @@ export class UIController {
                     <tr class="total-row">
                         <td colspan="2">合計スコア</td>
                         <td><strong>${score.displayScore}</strong></td>
+                    </tr>
+                    <tr class="result-build-info-row">
+                        <td colspan="3" class="result-build-info">${this._buildInfoText()}</td>
                     </tr>
                 </tbody>
             </table>
@@ -2329,7 +2415,7 @@ export class UIController {
                 <td>${turn}/8</td>
                 <td>${config.week}</td>
                 <td>${config.training || '-'}</td>
-                <td>${config.delete || 0}枚</td>
+                <td>${config.delete > 0 ? config.delete + '枚' : 'なし'}</td>
                 <td class="recommended-cell">${config.recommended || '-'}</td>
             `;
             tbody.appendChild(tr);
@@ -2674,15 +2760,8 @@ export class UIController {
             // 復元時はすでに保存済みのカードを使う
             const container = document.getElementById('training-cards');
             if (container) {
-                container.innerHTML = '';
-                trainingCards.forEach(card => {
-                    const cardElem = this.createCardElement(card, {
-                        clickable: true,
-                        compact: true,
-                        onClick: (c, elem) => this.onTrainingCardSelect(c, elem, container)
-                    });
-                    container.appendChild(cardElem);
-                });
+                this.selectedTrainingCard = null;
+                this.renderInspirationTrainingChoices(container, trainingCards);
             }
             const confirmBtn = document.getElementById('confirm-training');
             if (confirmBtn) confirmBtn.disabled = true;
