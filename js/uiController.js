@@ -1,4 +1,4 @@
-import { submitScore, getOrCreateUserUUID } from './scoreSubmitter.js?v=20260425-0900';
+import { submitScore, getOrCreateUserUUID } from './scoreSubmitter.js?v=20260503-2222';
 
 /**
  * UIController - UI操作・表示制御
@@ -587,6 +587,7 @@ export class UIController {
 
         // フェーズを設定（保存前に必要）
         this.gameState.phase = 'training';
+        this.markTrainingRefreshPhaseStart();
 
         if (this.gameState.calcMode) {
             this.gameState.currentTrainingCards = null;
@@ -611,6 +612,7 @@ export class UIController {
      * 研修カード描画（共通処理）
      */
     renderTrainingCards(trainingCards) {
+        this.markTrainingRefreshPhaseStart();
         const container = document.getElementById('training-cards');
         if (!container) return;
         const skipBtn = document.getElementById('btn-training-skip');
@@ -793,13 +795,17 @@ export class UIController {
      * ドロー変動通知を表示
      */
     renderDrawNotification() {
-        const container = document.getElementById('draw-notification');
-        if (!container) return;
+        const containers = ['draw-notification-top', 'draw-notification-bottom']
+            .map((id) => document.getElementById(id))
+            .filter(Boolean);
+        if (containers.length === 0) return;
 
         const notif = this.gameState.lastDrawNotification;
         if (!notif) {
-            container.innerHTML = '';
-            container.classList.add('hidden');
+            containers.forEach((container) => {
+                container.innerHTML = '';
+                container.classList.add('hidden');
+            });
             this.gameState.lastDrawNotification = null;
             return;
         }
@@ -808,8 +814,11 @@ export class UIController {
         if (notif.passion > 0) parts.push(`✊情熱 +${notif.passion}`);
         if (notif.fatigue > 0) parts.push(`💤疲労 -${notif.fatigue}`);
 
-        container.innerHTML = `<span class="draw-notif-text">${parts.join(' / ')} → ${notif.drawCount}枚ドロー</span>`;
-        container.classList.remove('hidden');
+        const html = `<span class="draw-notif-text">${parts.join(' / ')} → ${notif.drawCount}枚ドロー</span>`;
+        containers.forEach((container) => {
+            container.innerHTML = html;
+            container.classList.remove('hidden');
+        });
         this.gameState.lastDrawNotification = null;
     }
 
@@ -2046,6 +2055,28 @@ export class UIController {
         }
     }
 
+    markTrainingRefreshPhaseStart() {
+        this.gameState.trainingRefreshPhaseStartRemaining = this.gameState.trainingRefreshRemaining ?? 0;
+    }
+
+    getTrainingRefreshUsedInPhase() {
+        const start = this.gameState.trainingRefreshPhaseStartRemaining;
+        if (start === null || start === undefined) return 0;
+        return Math.max(0, start - (this.gameState.trainingRefreshRemaining ?? 0));
+    }
+
+    updateCalcTrainingInstruction(rarity) {
+        const instruction = document.querySelector('#training-area .instruction');
+        if (!instruction) return;
+
+        let text = `計算機モード: ${rarity}カードNoを入力してください`;
+        const usedRefresh = this.getTrainingRefreshUsedInPhase();
+        if (usedRefresh > 0) {
+            text += `【リフレッシュ${usedRefresh}回実行済み】`;
+        }
+        instruction.textContent = text;
+    }
+
     /**
      * 研修リフレッシュ実行
      */
@@ -2053,6 +2084,27 @@ export class UIController {
         const config = this.turnManager.getCurrentTurnConfig();
         const remaining = this.gameState.trainingRefreshRemaining ?? 0;
         if (remaining <= 0) return;
+
+        if (this.gameState.calcMode) {
+            this.gameState.trainingRefreshRemaining = remaining - 1;
+            this.gameState.currentTrainingCards = null;
+
+            const rarity = this.trainingSelectionMode === 'inspiration'
+                ? 'SR'
+                : (this.gameState.turn === 0 ? 'R' : config.training);
+            const input = document.getElementById('calc-training-input');
+            const msg = document.getElementById('calc-training-msg');
+            const preview = document.getElementById('calc-training-preview');
+            if (input) input.value = '';
+            if (msg) msg.textContent = '';
+            if (preview) preview.innerHTML = '';
+
+            this.updateTrainingRefreshUI(rarity);
+            this.updateCalcTrainingInstruction(rarity);
+            this.saveGameState();
+            this.logger?.log(`研修リフレッシュ実行: 残り${this.gameState.trainingRefreshRemaining}回`, 'action');
+            return;
+        }
 
         // 現在の候補カードを取得してリフレッシュ
         const currentCards = this.gameState.currentTrainingCards || [];
@@ -2687,35 +2739,29 @@ export class UIController {
         ));
 
         // 動員ポイントテーブル
-        const mobilizationRows = [
-            { label: '12以上', min: 12, max: Infinity, pts: 2 },
-            { label: '10〜11', min: 10, max: 11, pts: 1 },
-            { label: '9以下', min: 0, max: 9, pts: 0 },
-        ];
+        const mobilizationRows = this._buildLowerBoundRowsFromRankTable(
+            this._getFreshLegacyMobilizationBands(),
+            mobilization
+        );
         grid1.appendChild(this._buildScoreTable(
             '動員ポイント',
             [{ header: '体験' }, { header: 'pt' }],
-            mobilizationRows.map(r => ({
-                cells: [r.label, this._fmtPts(r.pts)],
-                current: mobilization >= r.min && mobilization <= r.max,
-            }))
+            mobilizationRows
         ));
         content.appendChild(grid1);
 
         // ---- 入退差（全幅） ----
-        const enrollmentRows = [
-            { label: '12以上', min: 12, max: Infinity, pts: 5 },
-            { label: '10〜11', min: 10, max: 11, pts: 4 },
-            { label: '8〜9', min: 8, max: 9, pts: 3 },
-            { label: '7以下', min: -Infinity, max: 7, pts: 0 },
-        ];
+        const enrollmentRows = this._buildLowerBoundRowsFromRankTable(
+            this._getLowerBoundBandsFromRankTable(
+                (row) => row?.enrollmentDiffThreshold,
+                (row) => row?.scores?.enrollmentDiff
+            ),
+            enrollmentDiff
+        );
         const fullTable = this._buildScoreTable(
             '入退差ポイント',
             [{ header: '入退差（入塾−退塾）' }, { header: 'pt' }],
-            enrollmentRows.map(r => ({
-                cells: [r.label, this._fmtPts(r.pts)],
-                current: enrollmentDiff >= (r.min === -Infinity ? -999 : r.min) && enrollmentDiff <= (r.max === Infinity ? 999 : r.max),
-            }))
+            enrollmentRows
         );
         fullTable.style.marginBottom = '6px';
         content.appendChild(fullTable);
@@ -2735,38 +2781,30 @@ export class UIController {
         const grid1 = document.createElement('div');
         grid1.className = 'score-grid';
 
-        // 動員ポイント（体験数 → scores.mobilization）
-        // rankPro.csv: C=15→1, B=20→2, B+=23→2(同), A=25→3, A+=32→3(同), S=40→4, S+=50→5
-        const mobilizationRows = [
-            { label: '50以上', min: 50, max: Infinity, pts: 5 },
-            { label: '40〜49', min: 40, max: 49, pts: 4 },
-            { label: '25〜39', min: 25, max: 39, pts: 3 },
-            { label: '20〜24', min: 20, max: 24, pts: 2 },
-            { label: '15〜19', min: 15, max: 19, pts: 1 },
-            { label: '14以下', min: 0, max: 14, pts: 0 },
-        ];
+        const mobilizationRows = this._buildLowerBoundRowsFromRankTable(
+            this._getLowerBoundBandsFromRankTable(
+                (row) => row?.thresholds?.experience,
+                (row) => row?.scores?.mobilization
+            ),
+            mobilization
+        );
         grid1.appendChild(this._buildScoreTable(
             '動員ポイント',
             [{ header: '体験' }, { header: 'pt' }],
-            mobilizationRows.map(r => ({
-                cells: [r.label, this._fmtPts(r.pts)],
-                current: mobilization >= r.min && mobilization <= r.max,
-            }))
+            mobilizationRows
         ));
 
-        // 満足ポイント（rankPro.csv基準: SS=35以上→2pt, S+=25以上→1pt, それ以外→0pt）
-        const satisfactionRows = [
-            { label: '35以上', min: 35, max: Infinity, pts: 2 },
-            { label: '25〜34', min: 25, max: 34, pts: 1 },
-            { label: '24以下', min: 0, max: 24, pts: 0 },
-        ];
+        const satisfactionRows = this._buildLowerBoundRowsFromRankTable(
+            this._getLowerBoundBandsFromRankTable(
+                (row) => row?.thresholds?.satisfaction,
+                (row) => row?.scores?.satisfaction
+            ),
+            satisfaction
+        );
         grid1.appendChild(this._buildScoreTable(
             '満足ポイント',
             [{ header: '満足' }, { header: 'pt' }],
-            satisfactionRows.map(r => ({
-                cells: [r.label, this._fmtPts(r.pts)],
-                current: satisfaction >= r.min && satisfaction <= r.max,
-            }))
+            satisfactionRows
         ));
         content.appendChild(grid1);
 
@@ -2774,47 +2812,136 @@ export class UIController {
         const grid2 = document.createElement('div');
         grid2.className = 'score-grid';
 
-        // 退塾ポイント（withdrawal <= withdrawalThreshold → score）
-        // rankPro.csv: S+=0→+1, S=1→0, A=2→-1, B=3→-3, C=4→-5, F=30→-13（E行はscore空欄でスキップ→Fにフォールスルー）
-        const withdrawalRows = [
-            { label: '0', min: 0, max: 0, pts: 1 },
-            { label: '1', min: 1, max: 1, pts: 0 },
-            { label: '2', min: 2, max: 2, pts: -1 },
-            { label: '3', min: 3, max: 3, pts: -3 },
-            { label: '4', min: 4, max: 4, pts: -5 },
-            { label: '5以上', min: 5, max: Infinity, pts: -13 },
-        ];
+        const withdrawalRows = this._buildUpperBoundRowsFromRankTable(
+            this._getUpperBoundBandsFromRankTable(
+                (row) => row?.withdrawalThreshold,
+                (row) => row?.scores?.withdrawal
+            ),
+            withdrawal
+        );
         grid2.appendChild(this._buildScoreTable(
             '退塾ポイント',
             [{ header: '退塾数' }, { header: 'pt' }],
-            withdrawalRows.map(r => ({
-                cells: [r.label, this._fmtPts(r.pts)],
-                current: withdrawal >= r.min && withdrawal <= (r.max === Infinity ? 9999 : r.max),
-            }))
+            withdrawalRows
         ));
 
-        // 入退差ポイント（enrollmentDiff >= enrollmentDiffThreshold → score）
-        // rankPro.csv: F=0→0, E=4→0, D=8→0, C=12→1, B=16→2, B+=18→3, A=20→4, A+=26→5, S=32→6, S+=40→7, SS=48→8
-        const enrollmentRows = [
-            { label: '48以上', min: 48, max: Infinity, pts: 8 },
-            { label: '40〜47', min: 40, max: 47, pts: 7 },
-            { label: '32〜39', min: 32, max: 39, pts: 6 },
-            { label: '26〜31', min: 26, max: 31, pts: 5 },
-            { label: '20〜25', min: 20, max: 25, pts: 4 },
-            { label: '18〜19', min: 18, max: 19, pts: 3 },
-            { label: '16〜17', min: 16, max: 17, pts: 2 },
-            { label: '12〜15', min: 12, max: 15, pts: 1 },
-            { label: '11以下', min: -Infinity, max: 11, pts: 0 },
-        ];
+        const enrollmentRows = this._buildLowerBoundRowsFromRankTable(
+            this._getLowerBoundBandsFromRankTable(
+                (row) => row?.enrollmentDiffThreshold,
+                (row) => row?.scores?.enrollmentDiff
+            ),
+            enrollmentDiff
+        );
         grid2.appendChild(this._buildScoreTable(
             '入退差ポイント',
             [{ header: '入退差' }, { header: 'pt' }],
-            enrollmentRows.map(r => ({
-                cells: [r.label, this._fmtPts(r.pts)],
-                current: enrollmentDiff >= (r.min === -Infinity ? -9999 : r.min) && enrollmentDiff <= (r.max === Infinity ? 9999 : r.max),
-            }))
+            enrollmentRows
         ));
         content.appendChild(grid2);
+    }
+
+    _getRankTableRows() {
+        return Array.isArray(this.scoreManager?.rankTable) ? this.scoreManager.rankTable : [];
+    }
+
+    _getLowerBoundBandsFromRankTable(thresholdAccessor, scoreAccessor) {
+        const bands = [];
+        for (const row of this._getRankTableRows()) {
+            const threshold = thresholdAccessor(row);
+            const pts = scoreAccessor(row);
+            if (threshold === null || threshold === undefined || pts === null || pts === undefined) {
+                continue;
+            }
+
+            if (bands.length > 0 && bands[bands.length - 1].pts === pts) {
+                continue;
+            }
+
+            bands.push({ min: threshold, pts });
+        }
+        return bands;
+    }
+
+    _getUpperBoundBandsFromRankTable(thresholdAccessor, scoreAccessor) {
+        const bands = [];
+        for (const row of this._getRankTableRows()) {
+            const max = thresholdAccessor(row);
+            const pts = scoreAccessor(row);
+            if (max === null || max === undefined || pts === null || pts === undefined) {
+                continue;
+            }
+            bands.push({ max, pts });
+        }
+        bands.sort((a, b) => a.max - b.max);
+        return bands;
+    }
+
+    _getFreshLegacyMobilizationBands() {
+        // rankFresh.csv には動員ポイント列がないため、現行ルール値をここで補う
+        return [
+            { min: 0, pts: 0 },
+            { min: 10, pts: 1 },
+            { min: 12, pts: 2 }
+        ];
+    }
+
+    _buildLowerBoundRowsFromRankTable(bands, currentValue) {
+        if (!Array.isArray(bands) || bands.length === 0) {
+            return [];
+        }
+
+        return bands
+            .map((band, index) => {
+                const nextBand = bands[index + 1];
+                const min = band.min;
+                const max = nextBand ? nextBand.min - 1 : Infinity;
+                return {
+                    cells: [this._formatLowerBoundRange(min, max), this._fmtPts(band.pts)],
+                    current: currentValue >= min && (max === Infinity || currentValue <= max)
+                };
+            })
+            .reverse();
+    }
+
+    _buildUpperBoundRowsFromRankTable(bands, currentValue) {
+        if (!Array.isArray(bands) || bands.length === 0) {
+            return [];
+        }
+
+        const rows = bands.map((band, index) => {
+            const prev = bands[index - 1];
+            const min = index === 0 ? 0 : prev.max + 1;
+            const max = index === bands.length - 1 ? Infinity : band.max;
+            return {
+                cells: [this._formatUpperBoundRange(min, max), this._fmtPts(band.pts)],
+                current: currentValue >= min && (max === Infinity || currentValue <= max)
+            };
+        });
+
+        return rows.reverse();
+    }
+
+    _formatLowerBoundRange(min, max) {
+        if (max === Infinity) {
+            return `${min}以上`;
+        }
+        if (min <= 0) {
+            return `${max}以下`;
+        }
+        if (min === max) {
+            return `${min}`;
+        }
+        return `${min}〜${max}`;
+    }
+
+    _formatUpperBoundRange(min, max) {
+        if (max === Infinity) {
+            return `${min}以上`;
+        }
+        if (min === max) {
+            return `${min}`;
+        }
+        return `${min}〜${max}`;
     }
 
     /**
@@ -2957,10 +3084,12 @@ export class UIController {
             if ((this.gameState.tokens?.inspiration ?? 0) > 0) {
                 this.trainingSelectionMode = 'inspiration';
                 this.inspirationRemaining = this.gameState.tokens.inspiration;
+                this.markTrainingRefreshPhaseStart();
                 this.showCalcTrainingUI('SR', 0, this.inspirationRemaining);
             } else {
                 const rarity = this.gameState.turn === 0 ? 'R' : this.turnManager.getCurrentTurnConfig()?.training;
                 const count = this.gameState.turn === 0 ? 2 : 1;
+                this.markTrainingRefreshPhaseStart();
                 this.showCalcTrainingUI(rarity, count, count);
             }
             return;
@@ -3066,7 +3195,7 @@ export class UIController {
         this.renderTokenDisplay();
 
         document.getElementById('btn-training-skip')?.classList.add('hidden');
-        document.getElementById('btn-training-refresh')?.classList.add('hidden');
+        this.updateTrainingRefreshUI(rarity);
 
         const container = document.getElementById('training-cards');
         if (!container) return;
@@ -3088,10 +3217,7 @@ export class UIController {
             </div>
         `;
 
-        const instruction = document.querySelector('#training-area .instruction');
-        if (instruction) {
-            instruction.textContent = `計算機モード: ${rarity}カードNoを入力してください`;
-        }
+        this.updateCalcTrainingInstruction(rarity);
 
         const confirmBtn = document.getElementById('confirm-training');
         if (confirmBtn) confirmBtn.disabled = false;
@@ -3187,11 +3313,12 @@ export class UIController {
 
         let container = document.getElementById('calc-action-inputs');
         if (!container) {
-            const staffArea = document.querySelector('#action-area .staff-area');
+            const anchor = document.getElementById('draw-notification-top')
+                || document.querySelector('#action-area .staff-area');
             container = document.createElement('div');
             container.id = 'calc-action-inputs';
             container.className = 'calc-input-group calc-action-inputs';
-            staffArea?.after(container);
+            anchor?.after(container);
         }
 
         const staffLabels = { leader: '室長', teacher: '講師', staff: '事務' };
