@@ -22,10 +22,26 @@ export function getOrCreateUserUUID() {
     return uuid;
 }
 
+export function buildVersionNumber(version) {
+    const digits = String(version || '').replace(/\D/g, '');
+    if (!digits) return null;
+    const num = Number(digits);
+    return Number.isFinite(num) ? num : null;
+}
+
+export function isClientVersionCurrent(clientVersion, currentVersion) {
+    const clientNum = buildVersionNumber(clientVersion);
+    const currentNum = buildVersionNumber(currentVersion);
+    if (clientNum === null || currentNum === null) {
+        return clientVersion === currentVersion;
+    }
+    return clientNum >= currentNum;
+}
+
 export async function submitScore(gameState, score, finalDeck, logger) {
     if (SCORE_ENDPOINT.includes('DEPLOY_ID')) {
         logger?.log('⚠️ スコア送信: エンドポイント未設定', 'info');
-        return;
+        return { ok: false, skipped: true, reason: 'endpoint_unset' };
     }
 
     const payload = {
@@ -34,6 +50,7 @@ export async function submitScore(gameState, score, finalDeck, logger) {
         buildVersion: window.BUILD_VERSION || 'unknown',
         userUUID: getOrCreateUserUUID(),
         difficulty: gameState.difficulty || 'fresh',
+        mode: gameState.calcMode ? '計算機' : '通常',
         experience: score.experience,
         enrollment: score.enrollment,
         satisfaction: score.satisfaction,
@@ -66,7 +83,16 @@ export async function submitScore(gameState, score, finalDeck, logger) {
                 throw new Error(`server: ${result.message || 'unknown error'}`);
             }
             logger?.log('📤 スコアを送信しました', 'info');
-            return;
+            const currentVersion = result.currentVersion || null;
+            const clientVersion = result.clientVersion || payload.buildVersion;
+            return {
+                ok: true,
+                currentVersion,
+                clientVersion,
+                versionMatch: currentVersion
+                    ? isClientVersionCurrent(clientVersion, currentVersion)
+                    : result.versionMatch !== false
+            };
         } catch (e) {
             console.warn(`[ScoreSubmit] 試行${attempt}/${MAX_RETRIES} 失敗:`, e.message);
             if (attempt < MAX_RETRIES) {
@@ -74,6 +100,7 @@ export async function submitScore(gameState, score, finalDeck, logger) {
                 await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
             } else {
                 logger?.log(`❌ スコア送信に失敗しました（${MAX_RETRIES}回試行）: ${e.message}`, 'error');
+                return { ok: false, error: e.message };
             }
         }
     }

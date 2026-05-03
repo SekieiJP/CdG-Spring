@@ -42,6 +42,7 @@ export class UIController {
         // 文字サイズモードを適用
         this.applyFontMode();
         this.applyCardDesc();
+        this.applyCardIcon();
 
         // イベントリスナー設定
         this.setupEventListeners();
@@ -133,6 +134,22 @@ export class UIController {
             const btn = document.getElementById(id);
             btn?.addEventListener('click', () => this.showSettingsOverlay());
         });
+
+        const calcToggle = document.getElementById('calc-mode-toggle');
+        if (calcToggle) {
+            calcToggle.checked = localStorage.getItem('cdg_calc_mode') === 'true';
+            calcToggle.addEventListener('change', () => {
+                localStorage.setItem('cdg_calc_mode', calcToggle.checked ? 'true' : 'false');
+            });
+        }
+
+        const title = document.querySelector('#start-overlay h1');
+        if (title) {
+            title.style.cursor = 'pointer';
+            title.addEventListener('click', () => {
+                document.getElementById('calc-mode-row')?.classList.remove('hidden');
+            });
+        }
     }
 
     /**
@@ -159,9 +176,18 @@ export class UIController {
         return localStorage.getItem('cdg_card_desc') === 'short';
     }
 
+    isCardIconShown() {
+        return localStorage.getItem('cdg_card_icon') !== 'hide';
+    }
+
     setCardDesc(mode) {
         localStorage.setItem('cdg_card_desc', mode);
         this.applyCardDesc();
+    }
+
+    setCardIcon(mode) {
+        localStorage.setItem('cdg_card_icon', mode);
+        this.applyCardIcon();
     }
 
     applyCardDesc() {
@@ -170,6 +196,10 @@ export class UIController {
         } else {
             document.documentElement.classList.remove('card-desc-short');
         }
+    }
+
+    applyCardIcon() {
+        document.documentElement.classList.toggle('card-icon-hide', !this.isCardIconShown());
     }
 
     /**
@@ -360,17 +390,22 @@ export class UIController {
         // カード説明設定が短縮時のみcompactでtopEffectを使用
         const useCompact = options.compact && this.isShortCardDesc();
         const displayEffect = useCompact && card.topEffect ? card.topEffect : card.effect;
+        const thumbnailHTML = this.buildCardThumbnailHTML(card, 'card-thumbnail');
 
         cardDiv.innerHTML = `
             <div class="card-header">
                 <span class="card-name">${this._escapeHTML(card.cardName)}</span>
+                <span class="card-meta">
+                    <span class="card-category-text ${categoryClass}">${this._escapeHTML(card.category)}</span>${recommendedMark}
+                    <span class="card-rarity rarity-${this._escapeHTML(card.rarity)}">${this._escapeHTML(card.rarity)}</span>
+                </span>
             </div>
-            <div class="card-meta">
-                <span class="card-category-text ${categoryClass}">${this._escapeHTML(card.category)}</span>${recommendedMark}
-                <span class="card-rarity rarity-${card.rarity}">${card.rarity}</span>
+            <div class="card-body">
+                <div class="card-effect">${this._escapeHTML(displayEffect)}</div>
+                ${thumbnailHTML}
             </div>
-            <div class="card-effect">${this._escapeHTML(displayEffect)}</div>
         `;
+        this.setupCardThumbnailFallback(cardDiv);
 
         // スマホ長押し/PCホバー: カード直下フローティング（showHoverTooltip）
         let pressTimer;
@@ -403,6 +438,28 @@ export class UIController {
         });
 
         return cardDiv;
+    }
+
+    getCardIconPath(card) {
+        const normalized = this.cardManager?.normalizeCardNo(card?.cardNo);
+        if (!normalized) return null;
+        const iconNo = String(normalized).padStart(2, '0');
+        const version = window.BUILD_VERSION ? `?v=${encodeURIComponent(window.BUILD_VERSION)}` : '';
+        return `data/cardIcon/icon${iconNo}.png${version}`;
+    }
+
+    buildCardThumbnailHTML(card, className) {
+        const src = this.getCardIconPath(card);
+        if (!src) return '';
+        return `<img class="${className}" src="${this._escapeHTML(src)}" alt="" loading="lazy" decoding="async">`;
+    }
+
+    setupCardThumbnailFallback(root) {
+        root.querySelectorAll('.card-thumbnail, .anim-card-thumbnail').forEach(img => {
+            img.addEventListener('error', () => {
+                img.remove();
+            }, { once: true });
+        });
     }
 
     /**
@@ -503,6 +560,8 @@ export class UIController {
 
         this.gameState.difficulty = difficulty;
         this.turnManager.initializeGame();
+        this.gameState.calcMode = document.getElementById('calc-mode-toggle')?.checked || false;
+        localStorage.setItem('cdg_calc_mode', this.gameState.calcMode ? 'true' : 'false');
         this.gameState.recordStartTime(); // initializeGame()のreset()より後に記録
         this.slotSelectionMode = false;
         this.selectedCardForPlacement = null;
@@ -528,6 +587,13 @@ export class UIController {
 
         // フェーズを設定（保存前に必要）
         this.gameState.phase = 'training';
+
+        if (this.gameState.calcMode) {
+            this.gameState.currentTrainingCards = null;
+            this.saveGameState();
+            this.showCalcTrainingUI('R', 2, 2);
+            return;
+        }
 
         const trainingCards = this.cardManager.drawTrainingCards('R', 4);
         window.CDG_DEBUG && console.log('[SAVE-DEBUG] showInitialTraining: 抽選カード:', trainingCards.map(c => c.cardName));
@@ -632,6 +698,11 @@ export class UIController {
     onConfirmTraining() {
         window.CDG_DEBUG && console.log('[SAVE-DEBUG] onConfirmTraining: 開始, turn=', this.gameState.turn);
 
+        if (this.gameState.calcMode) {
+            this.confirmCalcTraining();
+            return;
+        }
+
         // 発想追加習得モードの確定処理
         if (this.trainingSelectionMode === 'inspiration') {
             this.confirmInspirationTraining();
@@ -683,6 +754,17 @@ export class UIController {
 
         // トークン表示更新
         this.renderTokenDisplay();
+
+        if (this.gameState.calcMode) {
+            if (this.gameState.player.hand.length > 0) {
+                this.gameState.player.deck.push(...this.gameState.player.hand);
+                this.gameState.player.hand = [];
+            }
+            this.showCalcActionUI();
+            return;
+        }
+
+        this.setNormalActionUIVisibility();
 
         // ターンをまたいだ選択残りをクリア
         this.selectedCardForPlacement = null;
@@ -819,7 +901,7 @@ export class UIController {
                 // 別のカードをタップ → 選択切り替え
                 this.selectedCardForPlacement = card;
             }
-            this.renderHand(); // ハイライト更新
+            this.updateHandSelectionHighlight();
             return;
         }
         // 自動配置モード（既存挙動）
@@ -841,7 +923,17 @@ export class UIController {
                 : 'スロット手動指定: OFF（タップで自動配置）';
         }
         // 選択中ハイライトを解除
-        this.renderHand();
+        this.updateHandSelectionHighlight();
+    }
+
+    updateHandSelectionHighlight() {
+        const cardElems = document.querySelectorAll('#hand-cards .card');
+        cardElems.forEach((cardElem, index) => {
+            cardElem.classList.toggle(
+                'selected-for-placement',
+                this.slotSelectionMode && this.gameState.player.hand[index] === this.selectedCardForPlacement
+            );
+        });
     }
 
     /**
@@ -901,7 +993,7 @@ export class UIController {
             for (const placedCard of simulatedPlaced[slot]) {
                 const isRecommended = !!(config?.recommended && placedCard.category === config.recommended);
                 const recommendedStatus = isRecommended ? config.recommendedStatus : null;
-                const result = this.cardManager.simulateCardEffect(placedCard, slot, stats, recommendedStatus);
+                const result = this.cardManager.simulateCardEffect(placedCard, slot, stats, recommendedStatus, this.gameState);
 
                 if (placedCard === card) {
                     return !result.applied && result.skippedReason === 'cost_shortage';
@@ -1024,6 +1116,16 @@ export class UIController {
                 }
                 continue;
             }
+
+            const remainingTurnMatch = condition.match(/残り(\d+)ターン以上/);
+            if (remainingTurnMatch) {
+                const required = parseInt(remainingTurnMatch[1], 10);
+                const remaining = 8 - (this.gameState.turn || 0);
+                if (remaining < required) {
+                    unmetConditions.push(condition);
+                }
+                continue;
+            }
         }
 
         return unmetConditions;
@@ -1098,7 +1200,12 @@ export class UIController {
         }
 
         this.gameState.removePlacedCard(card, staff);
-        this.gameState.addToHand(card);
+        if (this.gameState.calcMode) {
+            this.removeCalcActionInputCard(staff, card);
+            this.gameState.player.deck.push(card);
+        } else {
+            this.gameState.addToHand(card);
+        }
 
         const slot = document.getElementById(`slot-${staff}`);
         if (slot) {
@@ -1113,6 +1220,23 @@ export class UIController {
 
         this.renderHand();
         this.updateActionButtonState();
+    }
+
+    removeCalcActionInputCard(staff, card) {
+        const input = document.getElementById(`calc-action-${staff}`);
+        if (!input) return;
+
+        const targetNo = this.cardManager.normalizeCardNo(card?.cardNo);
+        if (!targetNo) return;
+        const raw = input.value || '';
+        const pairs = raw.match(/\d{1,2}/g) || [];
+        const removeIndex = pairs.findIndex(pair => this.cardManager.normalizeCardNo(pair) === targetNo);
+        if (removeIndex === -1) return;
+
+        pairs.splice(removeIndex, 1);
+        input.value = pairs.join('');
+        document.getElementById(`calc-action-msg-${staff}`)?.replaceChildren();
+        this.updateCalcActionPreview(staff);
     }
 
     /**
@@ -1150,7 +1274,6 @@ export class UIController {
                 // クリックが子要素（配置済みカード）由来でも親スロットのstaffを使う
                 const card = this.selectedCardForPlacement;
                 this.selectedCardForPlacement = null;
-                this.renderHand(); // ハイライト解除
                 this.tryPlaceCardToSlot(card, staff);
             };
         });
@@ -1212,6 +1335,10 @@ export class UIController {
      * アクション実行
      */
     onConfirmAction() {
+        if (this.gameState.calcMode && !this.confirmAllCalcActionInputs()) {
+            return;
+        }
+
         const placeableCount = this.getPlaceableCardCountInHand();
         if (placeableCount > 0) {
             const confirmed = confirm(`まだ配置できるカードがあります（${placeableCount}枚）。このまま教室行動を確定しますか？`);
@@ -1321,16 +1448,21 @@ export class UIController {
                     const recommendedMark = isRecommended ? ' 🎯' : '';
                     const bonusText = recommendedApplied ? `<div class="anim-bonus-text">🎯 おすすめボーナス ${statusName}+1</div>` : '';
                     const skipText = skippedByCost ? '<div class="anim-skip-text">コスト不足のため効果なし</div>' : '';
+                    const thumbnailHTML = this.buildCardThumbnailHTML(card, 'anim-card-thumbnail');
 
                     cards.innerHTML = `
                         <div class="animation-card-item">
-                            <div class="anim-staff-name">${staffNames[staff]}${staffCards.length > 1 ? ` (${cardIdx + 1}/${staffCards.length})` : ''}</div>
-                            <div class="anim-card-name">${this._escapeHTML(card.cardName)}${categoryBadge}${recommendedMark}</div>
-                            <div class="anim-card-effect">${this._escapeHTML(card.effect)}</div>
-                            ${bonusText}
-                            ${skipText}
+                            <div class="anim-card-copy">
+                                <div class="anim-staff-name">${staffNames[staff]}${staffCards.length > 1 ? ` (${cardIdx + 1}/${staffCards.length})` : ''}</div>
+                                <div class="anim-card-name">${this._escapeHTML(card.cardName)}${categoryBadge}${recommendedMark}</div>
+                                <div class="anim-card-effect">${this._escapeHTML(card.effect)}</div>
+                                ${bonusText}
+                                ${skipText}
+                            </div>
+                            ${thumbnailHTML}
                         </div>
                     `;
+                    this.setupCardThumbnailFallback(cards);
 
                     if (perCardInfo) {
                         const beforeCardStats = { ...currentStats };
@@ -1756,6 +1888,13 @@ export class UIController {
         // ターン概要オーバーレイを表示
         this.showTurnOverlay(config);
 
+        if (this.gameState.calcMode) {
+            this.gameState.currentTrainingCards = null;
+            this.saveGameState();
+            this.showCalcTrainingUI(config.training, 1, 1);
+            return;
+        }
+
         const trainingCards = this.cardManager.drawTrainingCards(config.training, 3);
         window.CDG_DEBUG && console.log('[SAVE-DEBUG] showTrainingPhase: 抽選カード:', trainingCards.map(c => c.cardName));
 
@@ -2178,14 +2317,31 @@ export class UIController {
             if (highScoreDiv) highScoreDiv.appendChild(badge);
         }
 
-        // スコア自動送信（fire-and-forget）
-        submitScore(this.gameState, score, finalDeck, this.logger);
+        // スコア自動送信中は、二重送信を避けるためリスタートを一時的に止める
+        this.sendScoreAndHandleVersion(score, finalDeck);
 
         // セーブデータクリア（ゲーム終了）
         this.saveManager?.clear();
 
         // 最終ターンのカード一覧表示
         this.renderFinalCards(finalDeck);
+    }
+
+    async sendScoreAndHandleVersion(score, finalDeck) {
+        const restartBtn = document.getElementById('restart-game');
+        if (restartBtn) restartBtn.disabled = true;
+
+        try {
+            const result = await submitScore(this.gameState, score, finalDeck, this.logger);
+            if (result?.ok && result.versionMatch === false) {
+                localStorage.setItem('cdg_version_updated', 'true');
+                const current = result.currentVersion || '最新';
+                this.logger?.log(`⚠️ 新しいバージョンがあります（現在: ${window.BUILD_VERSION || 'unknown'} / 最新: ${current}）`, 'info');
+                this.showFloatNotification('新しいバージョンがあります。再読み込みをおすすめします', 'warning');
+            }
+        } finally {
+            if (restartBtn) restartBtn.disabled = false;
+        }
     }
 
     /**
@@ -2750,6 +2906,10 @@ export class UIController {
         // スタートオーバーレイを非表示
         const overlay = document.getElementById('start-overlay');
         overlay?.classList.add('hidden');
+        const calcToggle = document.getElementById('calc-mode-toggle');
+        if (calcToggle) {
+            calcToggle.checked = !!this.gameState.calcMode;
+        }
 
         // 復元中フラグを設定（再保存を防止）
         this.isRestoring = true;
@@ -2793,6 +2953,19 @@ export class UIController {
      * 研修フェーズUI復元（保存された抽選カードを表示）
      */
     restoreTrainingUI() {
+        if (this.gameState.calcMode) {
+            if ((this.gameState.tokens?.inspiration ?? 0) > 0) {
+                this.trainingSelectionMode = 'inspiration';
+                this.inspirationRemaining = this.gameState.tokens.inspiration;
+                this.showCalcTrainingUI('SR', 0, this.inspirationRemaining);
+            } else {
+                const rarity = this.gameState.turn === 0 ? 'R' : this.turnManager.getCurrentTurnConfig()?.training;
+                const count = this.gameState.turn === 0 ? 2 : 1;
+                this.showCalcTrainingUI(rarity, count, count);
+            }
+            return;
+        }
+
         // gameState.currentTrainingCards から復元
         const trainingCards = this.gameState.currentTrainingCards;
         window.CDG_DEBUG && console.log('[SAVE-DEBUG] restoreTrainingUI: trainingCards=', trainingCards?.map(c => c.cardName));
@@ -2839,6 +3012,19 @@ export class UIController {
         this.updateStatusDisplay();
         this.renderTokenDisplay();
 
+        if (this.gameState.calcMode) {
+            this.clearStaffSlots();
+            const placed = this.gameState.player.placed;
+            for (const staff of ['leader', 'teacher', 'staff']) {
+                if (!Array.isArray(placed[staff])) placed[staff] = [];
+                this.renderStaffSlot(staff);
+            }
+            this.showCalcActionUI();
+            return;
+        }
+
+        this.setNormalActionUIVisibility();
+
         // スタッフスロットをクリア
         this.clearStaffSlots();
 
@@ -2871,6 +3057,496 @@ export class UIController {
     }
 
     /**
+     * 計算機モード: 研修入力UI
+     */
+    showCalcTrainingUI(rarity, minCount, maxCount) {
+        this.showPhaseArea('training');
+        this.updateTurnDisplay();
+        this.updateStatusDisplay();
+        this.renderTokenDisplay();
+
+        document.getElementById('btn-training-skip')?.classList.add('hidden');
+        document.getElementById('btn-training-refresh')?.classList.add('hidden');
+
+        const container = document.getElementById('training-cards');
+        if (!container) return;
+
+        const countText = minCount === maxCount
+            ? `${minCount}枚`
+            : `${minCount}〜${maxCount}枚`;
+        const emptyText = minCount === 0 ? '（空欄=取得なし）' : '';
+
+        container.innerHTML = `
+            <div class="calc-input-group">
+                <div class="calc-slot-row">
+                    <label>${rarity}カード ${countText} ${emptyText}</label>
+                    <input id="calc-training-input" class="calc-card-input" type="text"
+                           inputmode="numeric" autocomplete="off" placeholder="例: 0106">
+                    <span id="calc-training-msg" class="calc-validate-msg"></span>
+                    <div id="calc-training-preview" class="calc-preview"></div>
+                </div>
+            </div>
+        `;
+
+        const instruction = document.querySelector('#training-area .instruction');
+        if (instruction) {
+            instruction.textContent = `計算機モード: ${rarity}カードNoを入力してください`;
+        }
+
+        const confirmBtn = document.getElementById('confirm-training');
+        if (confirmBtn) confirmBtn.disabled = false;
+
+        this.calcTrainingRequirement = { rarity, minCount, maxCount };
+
+        const input = document.getElementById('calc-training-input');
+        input?.addEventListener('input', () => {
+            if (this.handleCalcTerminatorInput(input, () => {
+                document.getElementById('confirm-training')?.click();
+            })) {
+                return;
+            }
+            this.updateCalcTrainingPreview();
+        });
+        input?.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                document.getElementById('confirm-training')?.click();
+            }
+        });
+        this.updateCalcTrainingPreview();
+        this.focusFirstCalcInput();
+    }
+
+    /**
+     * 計算機モード: 研修入力確定
+     */
+    confirmCalcTraining() {
+        const requirement = this.calcTrainingRequirement;
+        if (!requirement) return;
+
+        const input = document.getElementById('calc-training-input');
+        const msg = document.getElementById('calc-training-msg');
+        const raw = input?.value || '';
+        const result = this.validateCalcCardNos(raw);
+
+        if (!result.valid) {
+            if (msg) msg.textContent = result.reason;
+            this.showFloatNotification(result.reason, 'error');
+            return;
+        }
+
+        const cards = result.cards;
+        if (cards.length < requirement.minCount || cards.length > requirement.maxCount) {
+            const reason = requirement.minCount === requirement.maxCount
+                ? `${requirement.rarity}カードを${requirement.minCount}枚入力してください`
+                : `${requirement.rarity}カードを${requirement.minCount}〜${requirement.maxCount}枚入力してください`;
+            if (msg) msg.textContent = reason;
+            this.showFloatNotification(reason, 'error');
+            return;
+        }
+
+        const invalidRarity = cards.find(card => card.rarity !== requirement.rarity);
+        if (invalidRarity) {
+            const reason = `${invalidRarity.cardName}は${requirement.rarity}カードではありません`;
+            if (msg) msg.textContent = reason;
+            this.showFloatNotification(reason, 'error');
+            return;
+        }
+
+        cards.forEach(card => this.gameState.addToDeck({ ...card }));
+        this.gameState.currentTrainingCards = null;
+
+        if (this.trainingSelectionMode === 'inspiration') {
+            this.gameState.tokens.inspiration = 0;
+            this.trainingSelectionMode = 'normal';
+            this.inspirationRemaining = 0;
+            this.finalizeTrainingToAction();
+            return;
+        }
+
+        const inspiration = this.gameState.tokens?.inspiration ?? 0;
+        if (inspiration > 0) {
+            this.trainingSelectionMode = 'inspiration';
+            this.inspirationRemaining = inspiration;
+            this.showCalcTrainingUI('SR', 0, inspiration);
+            this.saveGameState();
+            return;
+        }
+
+        this.finalizeTrainingToAction();
+    }
+
+    /**
+     * 計算機モード: 行動入力UI
+     */
+    showCalcActionUI() {
+        this.setCalcActionUIVisibility();
+        this.selectedCardForPlacement = null;
+        this.clearStaffSlots();
+        ['leader', 'teacher', 'staff'].forEach(staff => this.renderStaffSlot(staff));
+
+        let container = document.getElementById('calc-action-inputs');
+        if (!container) {
+            const staffArea = document.querySelector('#action-area .staff-area');
+            container = document.createElement('div');
+            container.id = 'calc-action-inputs';
+            container.className = 'calc-input-group calc-action-inputs';
+            staffArea?.after(container);
+        }
+
+        const staffLabels = { leader: '室長', teacher: '講師', staff: '事務' };
+        container.innerHTML = ['leader', 'teacher', 'staff'].map(staff => `
+            <div class="calc-slot-row">
+                <label>${staffLabels[staff]}に配置するカードNo（空欄=配置なし）</label>
+                <input id="calc-action-${staff}" class="calc-card-input" type="text"
+                       inputmode="numeric" autocomplete="off" placeholder="例: 0102">
+                <span id="calc-action-msg-${staff}" class="calc-validate-msg"></span>
+                <div id="calc-action-preview-${staff}" class="calc-preview"></div>
+            </div>
+        `).join('');
+
+        ['leader', 'teacher', 'staff'].forEach(staff => {
+            const input = document.getElementById(`calc-action-${staff}`);
+            input?.addEventListener('input', () => {
+                if (this.handleCalcTerminatorInput(input, () => this.confirmCalcActionByStaff(staff))) {
+                    return;
+                }
+                this.updateCalcActionPreview(staff);
+            });
+            input?.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    this.confirmCalcActionByStaff(staff);
+                }
+            });
+            input?.addEventListener('blur', () => {
+                window.setTimeout(() => this.confirmCalcStaffInput(staff), 0);
+            });
+        });
+
+        const instruction = document.querySelector('#action-area .instruction');
+        if (instruction) {
+            instruction.textContent = '計算機モード: スタッフごとに配置するカードNoを入力してください';
+        }
+
+        this.updateActionButtonState();
+        ['leader', 'teacher', 'staff'].forEach(staff => this.updateCalcActionPreview(staff));
+        this.focusFirstCalcInput();
+    }
+
+    setCalcActionUIVisibility() {
+        document.querySelector('#action-area .hand-area')?.classList.add('hidden');
+        document.querySelector('#action-area .slot-mode-row')?.classList.add('hidden');
+        const handCards = document.getElementById('hand-cards');
+        if (handCards) handCards.innerHTML = '';
+    }
+
+    setNormalActionUIVisibility() {
+        document.querySelector('#action-area .hand-area')?.classList.remove('hidden');
+        document.querySelector('#action-area .slot-mode-row')?.classList.remove('hidden');
+        document.getElementById('calc-action-inputs')?.remove();
+    }
+
+    focusFirstCalcInput() {
+        window.setTimeout(() => {
+            document.querySelector('.phase-area:not(.hidden) .calc-card-input')?.focus();
+        }, 0);
+    }
+
+    focusNextCalcActionInput(staff) {
+        const order = ['leader', 'teacher', 'staff'];
+        const next = order[order.indexOf(staff) + 1];
+        if (next) {
+            document.getElementById(`calc-action-${next}`)?.focus();
+        }
+    }
+
+    confirmCalcActionByStaff(staff) {
+        if (staff === 'staff') {
+            document.getElementById('confirm-action')?.click();
+            return;
+        }
+        if (this.confirmCalcStaffInput(staff)) {
+            this.focusNextCalcActionInput(staff);
+        }
+    }
+
+    handleCalcTerminatorInput(input, onConfirm) {
+        const result = this.extractCalcInputBeforeTerminator(input?.value);
+        if (!result.found) return false;
+
+        input.value = result.value;
+        onConfirm();
+        return true;
+    }
+
+    extractCalcInputBeforeTerminator(rawInput) {
+        const raw = String(rawInput ?? '').trim();
+        for (let i = 0; i + 1 < raw.length; i += 2) {
+            if (raw.slice(i, i + 2) === '99') {
+                return { found: true, value: raw.slice(0, i) };
+            }
+        }
+        return { found: false, value: raw };
+    }
+
+    validateCalcCardNos(rawInput) {
+        const raw = String(rawInput ?? '').trim();
+        if (raw === '') {
+            return { valid: true, cards: [] };
+        }
+        if (!/^\d+$/.test(raw)) {
+            return { valid: false, reason: '数字のみ入力してください', cards: [] };
+        }
+        if (raw.length % 2 !== 0) {
+            return { valid: false, reason: 'カードNoは2桁ずつ入力してください', cards: [] };
+        }
+
+        const cards = [];
+        for (let i = 0; i < raw.length; i += 2) {
+            const no = raw.slice(i, i + 2);
+            const card = this.cardManager.getCardByNo(no);
+            if (!card) {
+                return { valid: false, reason: `カードNo ${no} は存在しません`, cards: [] };
+            }
+            cards.push(card);
+        }
+        return { valid: true, cards };
+    }
+
+    updateCalcTrainingPreview() {
+        const input = document.getElementById('calc-training-input');
+        const msg = document.getElementById('calc-training-msg');
+        const preview = document.getElementById('calc-training-preview');
+        if (!input || !msg || !preview) return;
+
+        const raw = input.value.trim();
+        if (raw === '' || raw.length % 2 !== 0) {
+            msg.textContent = '';
+            preview.innerHTML = '';
+            return;
+        }
+
+        const result = this.validateCalcCardNos(raw);
+        if (!result.valid) {
+            msg.textContent = result.reason;
+            preview.innerHTML = '';
+            return;
+        }
+
+        const requirement = this.calcTrainingRequirement;
+        const invalidRarity = result.cards.find(card => requirement && card.rarity !== requirement.rarity);
+        if (invalidRarity) {
+            msg.textContent = `${invalidRarity.cardName}は${requirement.rarity}カードではありません`;
+            preview.innerHTML = '';
+            return;
+        }
+
+        msg.textContent = '';
+        preview.innerHTML = this.buildCalcPreviewHTML(result.cards);
+    }
+
+    updateCalcActionPreview(staff) {
+        const input = document.getElementById(`calc-action-${staff}`);
+        const msg = document.getElementById(`calc-action-msg-${staff}`);
+        const preview = document.getElementById(`calc-action-preview-${staff}`);
+        if (!input || !msg || !preview) return;
+
+        const raw = input.value.trim();
+        if (raw === '' || raw.length % 2 !== 0) {
+            msg.textContent = '';
+            preview.innerHTML = '';
+            return;
+        }
+
+        const result = this.validateCalcCardNos(raw);
+        if (!result.valid) {
+            msg.textContent = result.reason;
+            preview.innerHTML = '';
+            return;
+        }
+
+        const validation = this.validateCalcActionCards(staff, result.cards);
+        if (!validation.valid) {
+            msg.textContent = validation.reason;
+            preview.innerHTML = '';
+            return;
+        }
+
+        msg.textContent = '';
+        preview.innerHTML = this.buildCalcPreviewHTML(result.cards);
+    }
+
+    validateCalcActionCards(staff, cards) {
+        const staffLabel = { leader: '室長', teacher: '講師', staff: '事務' }[staff];
+        const simulatedPlacedCount = this.gameState.player.placed[staff]?.length || 0;
+        const deckCounts = this.countDeckCardsByNo();
+        const usedCounts = new Map();
+        let placedCount = simulatedPlacedCount;
+
+        for (const card of cards) {
+            const normalized = this.cardManager.normalizeCardNo(card.cardNo);
+            const used = (usedCounts.get(normalized) || 0) + 1;
+            usedCounts.set(normalized, used);
+            if (used > (deckCounts.get(normalized) || 0)) {
+                return { valid: false, reason: `${card.cardName} はデッキ内枚数が不足しています` };
+            }
+
+            const allowedStaff = this.parseStaffRestriction(card.effect);
+            if (allowedStaff && !allowedStaff.includes(staffLabel)) {
+                return { valid: false, reason: `${card.cardName}は ${allowedStaff.join('・')} 専用です` };
+            }
+
+            if (!this.hasParallelEffect(card) && placedCount > 0) {
+                return { valid: false, reason: `${card.cardName}は重ね配置できません` };
+            }
+
+            placedCount++;
+        }
+
+        return { valid: true };
+    }
+
+    countDeckCardsByNo() {
+        const counts = new Map();
+        this.gameState.player.deck.forEach(card => {
+            const normalized = this.cardManager.normalizeCardNo(card.cardNo);
+            if (!normalized) return;
+            counts.set(normalized, (counts.get(normalized) || 0) + 1);
+        });
+        return counts;
+    }
+
+    buildCalcPreviewHTML(cards) {
+        if (cards.length === 0) return '';
+        return cards.map(card => {
+            const no = String(card.cardNo || '').padStart(2, '0');
+            return `<div class="calc-preview-card">No.${this._escapeHTML(no)} ${this._escapeHTML(card.cardName)} <span>${this._escapeHTML(card.rarity)} / ${this._escapeHTML(card.category)}</span></div>`;
+        }).join('');
+    }
+
+    /**
+     * 計算機モード: スタッフ入力を配置へ反映
+     */
+    confirmCalcStaffInput(staff, options = {}) {
+        const input = document.getElementById(`calc-action-${staff}`);
+        const msg = document.getElementById(`calc-action-msg-${staff}`);
+        const raw = input?.value || '';
+        const result = this.validateCalcCardNos(raw);
+        if (!result.valid) {
+            if (msg) msg.textContent = result.reason;
+            if (!options.silent) this.showFloatNotification(result.reason, 'error');
+            return false;
+        }
+
+        const snapshot = this.createCalcPlacementSnapshot();
+        this.returnPlacedStaffToDeck(staff);
+
+        const staffLabel = { leader: '室長', teacher: '講師', staff: '事務' }[staff];
+        for (const cardDef of result.cards) {
+            const deckCard = this.takeDeckCardByNo(cardDef.cardNo);
+            if (!deckCard) {
+                const reason = `${cardDef.cardName} はデッキ内枚数が不足しています`;
+                this.restoreCalcPlacementSnapshot(snapshot);
+                if (msg) msg.textContent = reason;
+                if (!options.silent) this.showFloatNotification(reason, 'error');
+                return false;
+            }
+
+            const allowedStaff = this.parseStaffRestriction(deckCard.effect);
+            if (allowedStaff && !allowedStaff.includes(staffLabel)) {
+                const reason = `${deckCard.cardName}は ${allowedStaff.join('・')} 専用です`;
+                this.gameState.player.deck.push(deckCard);
+                this.restoreCalcPlacementSnapshot(snapshot);
+                if (msg) msg.textContent = reason;
+                if (!options.silent) this.showFloatNotification(reason, 'error');
+                return false;
+            }
+
+            if (!this.hasParallelEffect(deckCard) && this.gameState.player.placed[staff].length > 0) {
+                const reason = `${deckCard.cardName}は重ね配置できません`;
+                this.gameState.player.deck.push(deckCard);
+                this.restoreCalcPlacementSnapshot(snapshot);
+                if (msg) msg.textContent = reason;
+                if (!options.silent) this.showFloatNotification(reason, 'error');
+                return false;
+            }
+
+            const unmetConditions = this.checkUnmetConditions(deckCard.effect, staff);
+            if (unmetConditions.length > 0 && !options.silent) {
+                this.showFloatNotification('一部の効果が発動しない可能性があります', 'warning');
+            }
+
+            if (this.willCardHaveCostShortage(deckCard, staff) && !options.silent) {
+                this.showFloatNotification('コスト不足のため、このカードの効果は無効になる予定です', 'warning');
+            }
+            this.gameState.placeCard(deckCard, staff);
+        }
+
+        this.renderStaffSlot(staff);
+        this.updateActionButtonState();
+        if (msg) msg.textContent = '';
+        document.getElementById(`calc-action-preview-${staff}`)?.replaceChildren();
+        return true;
+    }
+
+    confirmAllCalcActionInputs() {
+        if (!this.gameState.calcMode) return true;
+
+        const snapshot = this.createCalcPlacementSnapshot();
+        ['leader', 'teacher', 'staff'].forEach(staff => this.returnPlacedStaffToDeck(staff));
+
+        for (const staff of ['leader', 'teacher', 'staff']) {
+            if (!this.confirmCalcStaffInput(staff, { silent: true })) {
+                const msg = document.getElementById(`calc-action-msg-${staff}`);
+                const text = msg?.textContent || '入力内容を確認してください';
+                this.restoreCalcPlacementSnapshot(snapshot);
+                this.showFloatNotification(text, 'error');
+                document.getElementById(`calc-action-${staff}`)?.focus();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    createCalcPlacementSnapshot() {
+        return {
+            deck: [...this.gameState.player.deck],
+            placed: {
+                leader: [...this.gameState.player.placed.leader],
+                teacher: [...this.gameState.player.placed.teacher],
+                staff: [...this.gameState.player.placed.staff]
+            }
+        };
+    }
+
+    restoreCalcPlacementSnapshot(snapshot) {
+        this.gameState.player.deck = [...snapshot.deck];
+        this.gameState.player.placed = {
+            leader: [...snapshot.placed.leader],
+            teacher: [...snapshot.placed.teacher],
+            staff: [...snapshot.placed.staff]
+        };
+        ['leader', 'teacher', 'staff'].forEach(staff => this.renderStaffSlot(staff));
+    }
+
+    returnPlacedStaffToDeck(staff) {
+        const cards = this.gameState.player.placed[staff] || [];
+        this.gameState.player.deck.push(...cards);
+        this.gameState.player.placed[staff] = [];
+        this.renderStaffSlot(staff);
+    }
+
+    takeDeckCardByNo(cardNo) {
+        const normalized = this.cardManager.normalizeCardNo(cardNo);
+        const index = this.gameState.player.deck.findIndex(card =>
+            this.cardManager.normalizeCardNo(card.cardNo) === normalized
+        );
+        if (index === -1) return null;
+        return this.gameState.player.deck.splice(index, 1)[0];
+    }
+
+    /**
      * 設定オーバーレイを表示
      */
     showSettingsOverlay() {
@@ -2880,6 +3556,7 @@ export class UIController {
         const buildVersion = window.BUILD_VERSION || 'unknown';
         const currentFontMode = localStorage.getItem('cdg_font_mode') || 'normal';
         const currentCardDesc = localStorage.getItem('cdg_card_desc') || 'full';
+        const currentCardIcon = localStorage.getItem('cdg_card_icon') || 'show';
 
         // バッジ表示判定
         const showTutorialBadge = !localStorage.getItem('cdg_visited');
@@ -2901,6 +3578,13 @@ export class UIController {
                         <button class="font-toggle-option${currentCardDesc === 'short' ? ' active' : ''}" data-card-desc="short">短縮</button>
                     </div>
                     <p class="font-toggle-note">短縮表示時は長押しで全文を確認できます。設定は次回再読み込み時に適用</p>
+                </div>
+                <div class="settings-section">
+                    <h3>カード画像</h3>
+                    <div class="font-toggle">
+                        <button class="font-toggle-option${currentCardIcon !== 'hide' ? ' active' : ''}" data-card-icon="show">表示</button>
+                        <button class="font-toggle-option${currentCardIcon === 'hide' ? ' active' : ''}" data-card-icon="hide">非表示</button>
+                    </div>
                 </div>
                 <div class="settings-section">
                     <h3>リンク</h3>
@@ -2968,6 +3652,16 @@ export class UIController {
                 this.setCardDesc(mode);
                 settingsElem.querySelectorAll('[data-card-desc]').forEach(btn => {
                     btn.classList.toggle('active', btn.dataset.cardDesc === mode);
+                });
+            }
+
+            // data-card-icon ボタン（カード画像）
+            const cardIconBtn = e.target.closest('[data-card-icon]');
+            if (cardIconBtn) {
+                const mode = cardIconBtn.dataset.cardIcon;
+                this.setCardIcon(mode);
+                settingsElem.querySelectorAll('[data-card-icon]').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.cardIcon === mode);
                 });
             }
         });
