@@ -1,4 +1,4 @@
-import { submitScore, getOrCreateUserUUID } from './scoreSubmitter.js?v=20260503-2222';
+import { submitScore, getOrCreateUserUUID } from './scoreSubmitter.js?v=20260506-0030';
 
 /**
  * UIController - UI操作・表示制御
@@ -1795,7 +1795,12 @@ export class UIController {
         // Bug3修正: 選択済み枚数の表示を0にリセット
         const selectedCountElem = document.getElementById('selected-count');
         if (selectedCountElem) selectedCountElem.textContent = '0';
-        this.renderDeck(maxDelete);
+        if (this.gameState.calcMode) {
+            this.showCalcMeetingUI(maxDelete);
+        } else {
+            this.setNormalMeetingUIVisibility();
+            this.renderDeck(maxDelete);
+        }
 
         // フェーズ開始時に保存（思考場面の維持）
         this.saveGameState();
@@ -1853,6 +1858,12 @@ export class UIController {
      * 会議確定
      */
     onConfirmMeeting() {
+        if (this.gameState.calcMode) {
+            if (!this.confirmCalcMeetingSelection()) {
+                return;
+            }
+        }
+
         // Spec1修正: 最大枚数未満の場合は確認ダイアログを表示
         const maxDelete = this.turnManager.getCurrentDeleteMax();
         if (maxDelete > 0 && this.selectedCardsForDeletion.length < maxDelete) {
@@ -1882,6 +1893,66 @@ export class UIController {
             this.showResultPhase();
         } else {
             this.showTrainingPhase();
+        }
+    }
+
+    showCalcMeetingUI(maxDelete) {
+        this.setCalcMeetingUIVisibility();
+
+        const container = document.getElementById('calc-meeting-inputs');
+        if (!container) return;
+
+        container.className = 'calc-input-group calc-meeting-inputs';
+        container.innerHTML = `
+            <div class="calc-slot-row">
+                <label>削除するカードNo（空欄=削除なし、最大${maxDelete}枚）</label>
+                <input id="calc-meeting-input" class="calc-card-input" type="text"
+                       inputmode="numeric" autocomplete="off" placeholder="例: 0102">
+                <span id="calc-meeting-msg" class="calc-validate-msg"></span>
+                <div id="calc-meeting-preview" class="calc-preview"></div>
+            </div>
+        `;
+
+        const instruction = document.querySelector('#meeting-area .instruction');
+        if (instruction) {
+            instruction.textContent = `計算機モード: 削除するカードNoを入力してください（最大${maxDelete}枚）`;
+        }
+
+        const input = document.getElementById('calc-meeting-input');
+        input?.addEventListener('input', () => {
+            if (this.handleCalcTerminatorInput(input, () => {
+                document.getElementById('confirm-meeting')?.click();
+            })) {
+                return;
+            }
+            this.updateCalcMeetingPreview(maxDelete);
+        });
+        input?.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                document.getElementById('confirm-meeting')?.click();
+            }
+        });
+
+        this.updateCalcMeetingPreview(maxDelete);
+        this.focusFirstCalcInput();
+    }
+
+    setCalcMeetingUIVisibility() {
+        const deckCards = document.getElementById('deck-cards');
+        if (deckCards) deckCards.innerHTML = '';
+        deckCards?.classList.add('hidden');
+        document.querySelector('#meeting-area .selected-info')?.classList.add('hidden');
+        document.getElementById('calc-meeting-inputs')?.classList.remove('hidden');
+    }
+
+    setNormalMeetingUIVisibility() {
+        document.getElementById('deck-cards')?.classList.remove('hidden');
+        document.querySelector('#meeting-area .selected-info')?.classList.remove('hidden');
+        const container = document.getElementById('calc-meeting-inputs');
+        if (container) {
+            container.innerHTML = '';
+            container.classList.add('hidden');
         }
     }
 
@@ -3493,7 +3564,38 @@ export class UIController {
             return;
         }
 
-        const validation = this.validateCalcActionCards(staff, result.cards);
+        const simulation = this.simulateCalcActionAssignment(staff, result.cards);
+        if (!simulation.valid) {
+            msg.textContent = simulation.reason;
+            preview.innerHTML = '';
+            return;
+        }
+
+        msg.textContent = '';
+        preview.innerHTML = this.buildCalcPreviewHTML(simulation.cards);
+    }
+
+    updateCalcMeetingPreview(maxDelete) {
+        const input = document.getElementById('calc-meeting-input');
+        const msg = document.getElementById('calc-meeting-msg');
+        const preview = document.getElementById('calc-meeting-preview');
+        if (!input || !msg || !preview) return;
+
+        const raw = input.value.trim();
+        if (raw === '' || raw.length % 2 !== 0) {
+            msg.textContent = '';
+            preview.innerHTML = '';
+            return;
+        }
+
+        const result = this.validateCalcCardNos(raw);
+        if (!result.valid) {
+            msg.textContent = result.reason;
+            preview.innerHTML = '';
+            return;
+        }
+
+        const validation = this.validateCalcMeetingCards(result.cards, maxDelete);
         if (!validation.valid) {
             msg.textContent = validation.reason;
             preview.innerHTML = '';
@@ -3504,13 +3606,57 @@ export class UIController {
         preview.innerHTML = this.buildCalcPreviewHTML(result.cards);
     }
 
-    validateCalcActionCards(staff, cards) {
+    simulateCalcActionAssignment(staff, cards) {
         const staffLabel = { leader: '室長', teacher: '講師', staff: '事務' }[staff];
-        const simulatedPlacedCount = this.gameState.player.placed[staff]?.length || 0;
+        const workingDeck = [
+            ...this.gameState.player.deck,
+            ...(this.gameState.player.placed[staff] || [])
+        ];
+        const workingPlaced = {
+            leader: [...(this.gameState.player.placed.leader || [])],
+            teacher: [...(this.gameState.player.placed.teacher || [])],
+            staff: [...(this.gameState.player.placed.staff || [])]
+        };
+        workingPlaced[staff] = [];
+
+        const resolvedCards = [];
+        for (const cardDef of cards) {
+            const normalized = this.cardManager.normalizeCardNo(cardDef.cardNo);
+            const deckIndex = workingDeck.findIndex((card) =>
+                this.cardManager.normalizeCardNo(card.cardNo) === normalized
+            );
+            if (deckIndex === -1) {
+                return { valid: false, reason: `${cardDef.cardName} はデッキ内枚数が不足しています` };
+            }
+
+            const deckCard = workingDeck.splice(deckIndex, 1)[0];
+            const allowedStaff = this.parseStaffRestriction(deckCard.effect);
+            if (allowedStaff && !allowedStaff.includes(staffLabel)) {
+                return { valid: false, reason: `${deckCard.cardName}は ${allowedStaff.join('・')} 専用です` };
+            }
+
+            if (!this.hasParallelEffect(deckCard) && workingPlaced[staff].length > 0) {
+                return { valid: false, reason: `${deckCard.cardName}は重ね配置できません` };
+            }
+
+            workingPlaced[staff].push(deckCard);
+            resolvedCards.push(deckCard);
+        }
+
+        return {
+            valid: true,
+            cards: resolvedCards,
+            placedAfter: workingPlaced
+        };
+    }
+
+    validateCalcMeetingCards(cards, maxDelete) {
+        if (cards.length > maxDelete) {
+            return { valid: false, reason: `削除できるのは最大${maxDelete}枚です` };
+        }
+
         const deckCounts = this.countDeckCardsByNo();
         const usedCounts = new Map();
-        let placedCount = simulatedPlacedCount;
-
         for (const card of cards) {
             const normalized = this.cardManager.normalizeCardNo(card.cardNo);
             const used = (usedCounts.get(normalized) || 0) + 1;
@@ -3518,17 +3664,6 @@ export class UIController {
             if (used > (deckCounts.get(normalized) || 0)) {
                 return { valid: false, reason: `${card.cardName} はデッキ内枚数が不足しています` };
             }
-
-            const allowedStaff = this.parseStaffRestriction(card.effect);
-            if (allowedStaff && !allowedStaff.includes(staffLabel)) {
-                return { valid: false, reason: `${card.cardName}は ${allowedStaff.join('・')} 専用です` };
-            }
-
-            if (!this.hasParallelEffect(card) && placedCount > 0) {
-                return { valid: false, reason: `${card.cardName}は重ね配置できません` };
-            }
-
-            placedCount++;
         }
 
         return { valid: true };
@@ -3544,12 +3679,59 @@ export class UIController {
         return counts;
     }
 
+    takeDeckCardsByNos(cards) {
+        const removedCards = [];
+        for (const cardDef of cards) {
+            const deckCard = this.takeDeckCardByNo(cardDef.cardNo);
+            if (!deckCard) {
+                removedCards.forEach((card) => this.gameState.player.deck.push(card));
+                return null;
+            }
+            removedCards.push(deckCard);
+        }
+        return removedCards;
+    }
+
     buildCalcPreviewHTML(cards) {
         if (cards.length === 0) return '';
         return cards.map(card => {
             const no = String(card.cardNo || '').padStart(2, '0');
             return `<div class="calc-preview-card">No.${this._escapeHTML(no)} ${this._escapeHTML(card.cardName)} <span>${this._escapeHTML(card.rarity)} / ${this._escapeHTML(card.category)}</span></div>`;
         }).join('');
+    }
+
+    confirmCalcMeetingSelection() {
+        const maxDelete = this.turnManager.getCurrentDeleteMax();
+        this.selectedCardsForDeletion = [];
+        const input = document.getElementById('calc-meeting-input');
+        const msg = document.getElementById('calc-meeting-msg');
+        const raw = input?.value || '';
+        const result = this.validateCalcCardNos(raw);
+        if (!result.valid) {
+            if (msg) msg.textContent = result.reason;
+            this.showFloatNotification(result.reason, 'error');
+            return false;
+        }
+
+        const validation = this.validateCalcMeetingCards(result.cards, maxDelete);
+        if (!validation.valid) {
+            if (msg) msg.textContent = validation.reason;
+            this.showFloatNotification(validation.reason, 'error');
+            return false;
+        }
+
+        const selected = this.takeDeckCardsByNos(result.cards);
+        if (!selected) {
+            const reason = 'デッキ内枚数が不足しています';
+            if (msg) msg.textContent = reason;
+            this.showFloatNotification(reason, 'error');
+            return false;
+        }
+
+        selected.forEach((card) => this.gameState.player.deck.push(card));
+        this.selectedCardsForDeletion = selected;
+        if (msg) msg.textContent = '';
+        return true;
     }
 
     /**
@@ -3566,33 +3748,20 @@ export class UIController {
             return false;
         }
 
+        const simulation = this.simulateCalcActionAssignment(staff, result.cards);
+        if (!simulation.valid) {
+            if (msg) msg.textContent = simulation.reason;
+            if (!options.silent) this.showFloatNotification(simulation.reason, 'error');
+            return false;
+        }
+
         const snapshot = this.createCalcPlacementSnapshot();
         this.returnPlacedStaffToDeck(staff);
 
-        const staffLabel = { leader: '室長', teacher: '講師', staff: '事務' }[staff];
-        for (const cardDef of result.cards) {
-            const deckCard = this.takeDeckCardByNo(cardDef.cardNo);
+        for (const deckCardTemplate of simulation.cards) {
+            const deckCard = this.takeSpecificDeckCard(deckCardTemplate) || this.takeDeckCardByNo(deckCardTemplate.cardNo);
             if (!deckCard) {
-                const reason = `${cardDef.cardName} はデッキ内枚数が不足しています`;
-                this.restoreCalcPlacementSnapshot(snapshot);
-                if (msg) msg.textContent = reason;
-                if (!options.silent) this.showFloatNotification(reason, 'error');
-                return false;
-            }
-
-            const allowedStaff = this.parseStaffRestriction(deckCard.effect);
-            if (allowedStaff && !allowedStaff.includes(staffLabel)) {
-                const reason = `${deckCard.cardName}は ${allowedStaff.join('・')} 専用です`;
-                this.gameState.player.deck.push(deckCard);
-                this.restoreCalcPlacementSnapshot(snapshot);
-                if (msg) msg.textContent = reason;
-                if (!options.silent) this.showFloatNotification(reason, 'error');
-                return false;
-            }
-
-            if (!this.hasParallelEffect(deckCard) && this.gameState.player.placed[staff].length > 0) {
-                const reason = `${deckCard.cardName}は重ね配置できません`;
-                this.gameState.player.deck.push(deckCard);
+                const reason = `${deckCardTemplate.cardName} はデッキ内枚数が不足しています`;
                 this.restoreCalcPlacementSnapshot(snapshot);
                 if (msg) msg.textContent = reason;
                 if (!options.silent) this.showFloatNotification(reason, 'error');
@@ -3669,6 +3838,12 @@ export class UIController {
         const index = this.gameState.player.deck.findIndex(card =>
             this.cardManager.normalizeCardNo(card.cardNo) === normalized
         );
+        if (index === -1) return null;
+        return this.gameState.player.deck.splice(index, 1)[0];
+    }
+
+    takeSpecificDeckCard(targetCard) {
+        const index = this.gameState.player.deck.findIndex((card) => card === targetCard);
         if (index === -1) return null;
         return this.gameState.player.deck.splice(index, 1)[0];
     }
