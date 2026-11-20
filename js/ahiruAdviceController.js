@@ -1,10 +1,12 @@
-import {loadAdviceCalibration} from './ahiruCalibrationLoader.js?v=20261107-0064';
-import {AhiruAdviceView} from './ahiruAdviceView.js?v=20261107-0064';
-import {createAdvisorObservation,recommendAcquisition} from './acquisitionAdvisor.js?v=20261107-0064';
-import {alignAcquisitionWithStatus} from './proAcquisitionConsistency.js?v=20261107-0064';
-import {recommendProStatus} from './ahiruProAdvice.js?v=20261107-0064';
-import {recommendFreshStatus} from './ahiruFreshAdvice.js?v=20261107-0064';
-export const ADVICE_SCENE_VERSION=1;
+import { createMasterAdvice } from './masterAdvice.js?v=20261122-0069';
+import {loadAdviceCalibration} from './ahiruCalibrationLoader.js?v=20261122-0069';
+import {AhiruAdviceView} from './ahiruAdviceView.js?v=20261122-0069';
+import {createAdvisorObservation,recommendAcquisition} from './acquisitionAdvisor.js?v=20261122-0069';
+import {alignAcquisitionWithStatus} from './proAcquisitionConsistency.js?v=20261122-0069';
+import {recommendProStatus} from './ahiruProAdvice.js?v=20261122-0069';
+import {recommendFreshStatus} from './ahiruFreshAdvice.js?v=20261122-0069';
+import {chooseFreshForecastAcquisition} from './freshOutcomeForecast.js?v=20261122-0069';
+export const ADVICE_SCENE_VERSION=2;
 const validStatus=status=>status&&['red','yellow','green'].includes(status.tone)&&typeof status.text==='string'&&status.text.trim()&&Array.from(status.text).length<=25;
 /** 確定状態と提示候補のスナップショットを、助言・取得アシストで共有する。 */
 export class AhiruAdviceController {
@@ -17,13 +19,28 @@ export class AhiruAdviceController {
         for(const difficulty of ['fresh','pro'])this.loadCalibration(difficulty);
         this.scheduleRefresh();
     }
-    setPhase(phase){this.phase=phase;if(!['training','meeting'].includes(phase))this.view?.hide();else this.scheduleRefresh();}
+    setPhase(phase){this.phase=phase;if(!this.eligible())this.view?.hide();else this.scheduleRefresh();}
     setDeleteMax(value){this.deleteMax=Math.max(0,Number(value)||0);this.scheduleRefresh();}
     scheduleRefresh(){
         if(!this.view||this.disposed||this.scheduled)return;this.scheduled=true;
         queueMicrotask(()=>{this.scheduled=false;this.refresh();});
     }
-    eligible(){return ['fresh','pro'].includes(this.ui.gameState.difficulty)&&['training','meeting'].includes(this.phase||this.ui.gameState.phase);}
+    eligible(){
+        const state=this.ui.gameState,phase=this.phase||state.phase;
+        if(state.difficulty==='int')return !state.calcMode&&!state.event?.enabled&&['training','meeting','outing','action'].includes(phase);
+        return ['fresh','pro'].includes(state.difficulty)&&['training','meeting'].includes(phase);
+    }
+    getMasterScene(){
+        const ui=this.ui,state=ui.gameState;
+        if(!ui.scoreManager.rankTable?.length)return null;
+        if(this.masterRun!==state.runId||this.masterCatalog!==ui.cardManager.allCards||this.masterRanks!==ui.scoreManager.rankTable){
+            this.masterDecision=createMasterAdvice(ui);
+            this.masterRun=state.runId;
+            this.masterCatalog=ui.cardManager.allCards;
+            this.masterRanks=ui.scoreManager.rankTable;
+        }
+        return this.masterDecision();
+    }
     loadCalibration(difficulty=this.ui.gameState.difficulty){
         if(this.models.has(difficulty))return;
         const entry={status:'loading',calibration:null};this.models.set(difficulty,entry);
@@ -38,6 +55,7 @@ export class AhiruAdviceController {
         if(this.disposed||!this.eligible())return null;
         const ui=this.ui,state=ui.gameState,phase=(this.phase||state.phase)==='meeting'?'deletion':'acquisition';
         if(state.playRecord!==this.runRecord){this.view?.reset();this.runRecord=state.playRecord;}
+        if(state.difficulty==='int')return this.getMasterScene();
         if(this.modelStatus==='unloaded')this.loadCalibration();
         const inspiration=ui.trainingSelectionMode==='inspiration',cards=phase==='acquisition'?(state.currentTrainingCards||[]):[];
         if(phase==='acquisition'&&!cards.length)return null;
@@ -50,7 +68,12 @@ export class AhiruAdviceController {
             catalog:ui.cardManager.allCards,refreshEnabled:state.config?.trainingRefresh?.enabled===true};
         const acquisition=phase==='acquisition'?recommendAcquisition(observation):null;
         const recommend=state.difficulty==='fresh'?recommendFreshStatus:recommendProStatus;
-        const status=recommend(observation,{...options,acquisitionAdvice:acquisition});
+        const optionsWithAcquisition={...options,acquisitionAdvice:acquisition};
+        let status=recommend(observation,optionsWithAcquisition);
+        if(state.difficulty==='fresh'&&phase==='acquisition'&&status?.preferredIndices){
+            const choice=chooseFreshForecastAcquisition(observation,acquisition,status.preferredIndices);
+            if(choice)status=recommend(observation,{...optionsWithAcquisition,preferredAcquisition:choice.indices});
+        }
         if(!validStatus(status))return null;
         const aligned=alignAcquisitionWithStatus(acquisition,status);
         // 選択肢の投影は計算中だけ保持し、中断データへは確定結果だけ保存する。

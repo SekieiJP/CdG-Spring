@@ -1,4 +1,4 @@
-import { AnimationClock } from './animationClock.js?v=20261107-0064';
+import { AnimationClock } from './animationClock.js?v=20261122-0069';
 /** 確定した解決結果を表示する。通常のカード効果はここでは再適用しない。 */
 export class ActionAnimationController {
     constructor(ui) {
@@ -225,19 +225,13 @@ export class ActionAnimationController {
 
             await this._sleep(50); // transition: none を確定させる
 
-            // 最終値がこのランクに収まるかチェック
-            const afterNextRank = this.scoreManager.getStatusRank(statKey, toValue, difficulty);
-            if (!afterNextRank || afterNextRank.grade === nextRank?.grade) {
-                // 最後のランク → 最終値に対応するバー位置まで伸ばす
-                if (afterNextRank && labelElem) {
-                    labelElem.textContent = afterNextRank.grade;
-                }
-                updateProgress(afterNextRank, toValue, true);
+            if (!nextRank || nextRank.nextThreshold <= currentValue || toValue < nextRank.nextThreshold) {
+                if (labelElem) labelElem.textContent = finalRank.grade;
+                updateProgress(finalRank, toValue, true);
                 await this._sleep(400);
-                updateDeficit(afterNextRank);
+                updateDeficit(finalRank);
                 break;
             }
-            // まだランクアップが残っている → ループ継続
         }
     }
 

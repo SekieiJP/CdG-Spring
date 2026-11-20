@@ -1,23 +1,42 @@
-import { GameState } from './gameState.js?v=20261107-0064';
-import { CardManager } from './cardManager.js?v=20261107-0064';
-import { TurnManager } from './turnManager.js?v=20261107-0064';
-import { ScoreManager } from './scoreManager.js?v=20261107-0064';
-import { getDifficultyConfig } from './difficultyConfig.js?v=20261107-0064';
-import * as acquisitionAdvisor from './acquisitionAdvisor.js?v=20261107-0064';
-import * as formula from './proAcquisitionAdvisor.js?v=20261107-0064';
-import * as researchModule from './cpu/pro-strategy-research.js?v=20261107-0064';
-import { createCpuPolicyKernel } from './cpu/policyKernel.js?v=20261107-0064';
-import { startReplayRecording, captureReplayBoundary, completeReplayAction, finalizeReplayRecording } from './replayRecorder.js?v=20261107-0064';
+import './difficultyExtensions.js?v=20261122-0069';
+import { createMasterCpuPolicy } from './masterCpuPolicy.js?v=20261122-0069';
+import { GameState } from './gameState.js?v=20261122-0069';
+import { CardManager } from './cardManager.js?v=20261122-0069';
+import { TurnManager } from './turnManager.js?v=20261122-0069';
+import { ScoreManager } from './scoreManager.js?v=20261122-0069';
+import { getDifficultyConfig } from './difficultyConfig.js?v=20261122-0069';
+import * as acquisitionAdvisor from './acquisitionAdvisor.js?v=20261122-0069';
+import * as formula from './proAcquisitionAdvisor.js?v=20261122-0069';
+import * as researchModule from './cpu/pro-strategy-research.js?v=20261122-0069';
+import { createCpuPolicyKernel } from './cpu/policyKernel.js?v=20261122-0069';
+import { startReplayRecording, captureReplayBoundary, captureReplayTrainingChoice, completeReplayAction, finalizeReplayRecording } from './replayRecorder.js?v=20261122-0069';
+import { createEventState, getEventDefinition, getEventItem } from './eventManager.js?v=20261122-0069';
+import { prepareCpuEventTurn, finishCpuEventTraining, resolveCpuEventEffects } from './cpuEventRuntime.js?v=20261122-0069';
+import { createFreshForecastCpuPolicy } from './freshCpuPolicy.js?v=20261122-0069';
+import { FORECAST_MODEL } from './freshOutcomeForecast.js?v=20261122-0069';
+
+const dataJobs = new Map();
+const policyAdvisor = {
+    ...acquisitionAdvisor,
+    createAdvisorObservation(state, cards, options) {
+        const observation = acquisitionAdvisor.createAdvisorObservation(state, cards, options);
+        // 固定方略の評価モデルは通常モード向け。イベントの実効果はゲーム状態側で解決する
+        return observation.mode === 'normal' ? observation : { ...observation, mode: 'normal' };
+    }
+};
 
 async function readData(name) {
+    if (dataJobs.has(name)) return dataJobs.get(name);
     const url = new URL(`../data/cpu/${name}`, import.meta.url);
-    const response = await fetch(url);
-    if (!response.ok) throw new Error('あひる先生の方略データを読み込めません');
-    return response.json();
+    const job = fetch(url).then(response => {
+        if (!response.ok) throw new Error('あひる先生の方略データを読み込めません');
+        return response.json();
+    }).catch(error => { dataJobs.delete(name); throw error; });
+    dataJobs.set(name, job); return job;
 }
 
-export async function createCpuReplay({ difficulty, seed, onProgress = () => {}, resources = null }) {
-    if (!['fresh', 'pro'].includes(difficulty)) throw new Error('CPUの難易度が不正です');
+export async function createCpuEngine({ difficulty, seed, resources = null }) {
+    if (!['fresh', 'pro', 'int'].includes(difficulty)) throw new Error('CPUの難易度が不正です');
     const state = new GameState(); state.difficulty = difficulty;
     const cardManager = new CardManager(null);
     const turnManager = new TurnManager(state, cardManager);
@@ -34,8 +53,7 @@ export async function createCpuReplay({ difficulty, seed, onProgress = () => {},
         if (!cardsLoaded || !ranksLoaded?.length) throw new Error('CPU用のカード・ランクデータを読み込めません');
     }
     cardManager.rankVersion = scoreManager.dataVersion;
-    turnManager.initializeGame({ seed: String(seed), source: 'cpu' }); state.recordStartTime();
-    startReplayRecording(state, { cardManager, scoreManager });
+    turnManager.initializeGame({ seed: String(seed), source: 'cpu' });
     let research = null, valueModel = null;
     if (difficulty === 'pro') {
         research = resources?.research || await readData('pro-policy-v1.json');
@@ -48,35 +66,113 @@ export async function createCpuReplay({ difficulty, seed, onProgress = () => {},
         };
     }
     const game = { gameState: state, cardManager, turnManager, scoreManager };
-    const policy = createCpuPolicyKernel(game, { difficulty, acquisitionAdvisor, formula, researchModule, research, valueModel });
-    const acquire = (rarity, pickCount, drawCount, phaseTag, allowSkip) => {
-        const candidates = cardManager.drawTrainingCards(rarity, drawCount);
+    if (difficulty === 'int') return { game, policy: createMasterCpuPolicy(game) };
+    const policy = createCpuPolicyKernel(game, { difficulty, acquisitionAdvisor: policyAdvisor, formula, researchModule, research, valueModel });
+    return { game, policy: difficulty === 'fresh' ? createFreshForecastCpuPolicy(game, policy) : policy };
+}
+
+export async function createCpuReplay({ difficulty, seed, onProgress = () => {}, resources = null, eventId = null, captureViewing = false }) {
+    const { game, policy } = await createCpuEngine({ difficulty, seed, resources });
+    const { gameState: state, cardManager, turnManager, scoreManager } = game;
+    if (difficulty === 'int' && eventId) throw new Error('MASTERのイベントには対応していません');
+    const eventDefinition = eventId ? getEventDefinition(eventId) : null;
+    if (eventId && !eventDefinition) throw new Error('このイベントのお手本プレイには対応していません');
+    if (eventDefinition) state.event = createEventState(eventDefinition, difficulty);
+    state.recordStartTime();
+    startReplayRecording(state, { cardManager, scoreManager, eventDefinition,
+        eventItems: eventDefinition?.items.map(getEventItem) || [], captureViewing });
+    const acquire = (rarity, pickCount, drawCount, phaseTag, allowSkip, supplied = null) => {
+        const candidates = supplied || cardManager.drawTrainingCards(rarity, drawCount);
         state.currentTrainingCards = candidates;
         captureReplayBoundary(state, 'training-offer', { rarity, pickCount, allowSkip });
+        const refreshRemaining = state.trainingRefreshRemaining;
+        if (phaseTag === 'event') state.trainingRefreshRemaining = 0;
         const decision = policy.training({ rarity, candidates, pickCount, drawCount, phaseTag, allowSkip });
+        if (phaseTag === 'event') state.trainingRefreshRemaining = refreshRemaining;
         state.currentTrainingCards = decision.candidates;
+        captureReplayTrainingChoice(state, decision.selected, { rarity, pickCount, allowSkip, phaseTag });
         decision.selected.forEach(card => state.addToDeck({ ...card }));
         captureReplayBoundary(state, 'training-choice', { selected: decision.selected.map(card => card.cardNo), allowSkip });
     };
-    state.phase = 'training';
-    while (state.turn < state.totalTurns) {
-        const turn = state.turn, rarity = turnManager.getCurrentTurnConfig().training;
-        state.trainingSelectionMode = 'normal';
-        acquire(turn === 0 ? 'R' : rarity, turn === 0 ? 2 : 1, turn === 0 ? 4 : 3, turn === 0 ? 'initial' : 'main', false);
-        let inspiration = state.tokens.inspiration || 0;
-        while (inspiration > 0) {
-            state.trainingSelectionMode = 'inspiration';
-            acquire('SR', 1, 3, 'inspiration', true);
-            state.tokens.inspiration = --inspiration;
+    if (difficulty === 'int') {
+        playMasterReplay(game, policy, acquire, onProgress);
+    } else {
+        state.phase = 'training';
+        while (state.turn < state.totalTurns) {
+            const turn = state.turn, rarity = turnManager.getCurrentTurnConfig().training;
+            state.trainingSelectionMode = 'normal';
+            const eventCards = prepareCpuEventTurn(game);
+            if (eventCards) {
+                acquire('SSR', 1, 3, 'event', false, eventCards);
+                finishCpuEventTraining(state);
+            }
+            acquire(turn === 0 ? 'R' : rarity, turn === 0 ? 2 : 1, turn === 0 ? 4 : 3, turn === 0 ? 'initial' : 'main', false);
+            let inspiration = state.tokens.inspiration || 0;
+            while (inspiration > 0) {
+                state.trainingSelectionMode = 'inspiration';
+                acquire('SR', 1, 3, 'inspiration', true);
+                state.tokens.inspiration = --inspiration;
+            }
+            state.trainingSelectionMode = 'normal'; state.currentTrainingCards = null;
+            turnManager.advancePhase(); policy.place(); turnManager.executeActions();
+            resolveCpuEventEffects(state);
+            completeReplayAction(state); turnManager.advancePhase();
+            if (state.event) state.event.actionCompletion = null;
+            if (state.phase === 'meeting') { policy.delete(); turnManager.advancePhase(); }
+            onProgress(state.turn);
         }
-        state.trainingSelectionMode = 'normal'; state.currentTrainingCards = null;
-        turnManager.advancePhase(); policy.place(); turnManager.executeActions();
-        completeReplayAction(state); turnManager.advancePhase();
-        if (state.phase === 'meeting') { policy.delete(); turnManager.advancePhase(); }
-        onProgress(state.turn);
     }
     const record = finalizeReplayRecording(state, scoreManager.calculateScore(state), state.getOwnedCards());
     if (!record) throw new Error('あひる先生のプレイ記録を確定できませんでした');
-    record.metadata.cpuPolicy = difficulty === 'pro' ? 'fixed-pro-v1' : 'reach@fresh_stable';
+    record.metadata.cpuPolicy = difficulty === 'int' ? 'master-v2' : difficulty === 'pro' ? 'fixed-pro-v1' : eventId ? 'reach@fresh_stable' : FORECAST_MODEL;
     return record;
+}
+
+function playMasterReplay(game, policy, acquire, onProgress) {
+    const { gameState: state, turnManager } = game;
+    function training(mode, phaseTag) {
+        state.trainingSelectionMode = mode;
+        const offer = turnManager.getTrainingOfferConfig();
+        if (!offer) return;
+        acquire(offer.rarity, offer.pickCount, offer.offerCount, phaseTag, offer.allowSkip);
+        state.currentTrainingCards = null;
+    }
+
+    turnManager.advancePhase();
+    while (state.phase !== 'end') {
+        if (state.phase === 'outing') {
+            const move = policy.decide();
+            turnManager.beginOuting(move.place);
+            while (state.ruleState.int.outing?.stage === 'card') {
+                const choice = policy.decide();
+                if (choice.kind === 'refresh') {
+                    turnManager.refreshOutingCandidates();
+                    continue;
+                }
+                const candidates = state.ruleState.int.outing.candidates;
+                for (const index of choice.indices) turnManager.selectOutingCard(candidates[index]);
+                if (!turnManager.confirmOutingCards()) throw new Error('CPUが外出先のカードを確定できません');
+            }
+            if (state.ruleState.int.outing?.stage === 'staff') {
+                turnManager.selectOutingStaff(policy.decide().staff);
+            }
+        } else {
+            training('normal', state.turn === 0 ? 'initial' : 'main');
+            while (state.tokens.inspiration > 0) {
+                training('inspiration', 'inspiration');
+                state.tokens.inspiration--;
+            }
+            state.trainingSelectionMode = 'normal';
+            turnManager.advancePhase();
+            policy.place();
+            turnManager.executeActions();
+            completeReplayAction(state);
+            turnManager.advancePhase();
+            if (state.phase === 'meeting') {
+                policy.delete();
+                turnManager.advancePhase();
+            }
+        }
+        onProgress(state.turn);
+    }
 }

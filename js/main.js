@@ -2,18 +2,19 @@
  * Main - エントリーポイント
  * v20260320-2335: 難易度選択システム追加
  */
-import { Logger } from './logger.js?v=20261107-0064';
-import { GameState } from './gameState.js?v=20261107-0064';
-import { CardManager } from './cardManager.js?v=20261107-0064';
-import { TurnManager } from './turnManager.js?v=20261107-0064';
-import { ScoreManager } from './scoreManager.js?v=20261107-0064';
-import { UIController } from './uiController.js?v=20261107-0064';
-import { SaveManager } from './saveManager.js?v=20261107-0064';
-import { getDifficultyConfig, registerDifficulty } from './difficultyConfig.js?v=20261107-0064';
-import { getEventDefinition } from './eventManager.js?v=20261107-0064';
-import './difficultyExtensions.js?v=20261107-0064';
+import { Logger } from './logger.js?v=20261122-0069';
+import { GameState } from './gameState.js?v=20261122-0069';
+import { CardManager } from './cardManager.js?v=20261122-0069';
+import { TurnManager } from './turnManager.js?v=20261122-0069';
+import { ScoreManager } from './scoreManager.js?v=20261122-0069';
+import { UIController } from './uiController.js?v=20261122-0069';
+import { SaveManager } from './saveManager.js?v=20261122-0069';
+import { hasStartedRoom, recordRoomStart } from './colleagueRoom.js?v=20261122-0069';
+import { getDifficultyConfig, registerDifficulty } from './difficultyConfig.js?v=20261122-0069';
+import { getEventDefinition } from './eventManager.js?v=20261122-0069';
+import './difficultyExtensions.js?v=20261122-0069';
 
-const CACHE_BUSTER = 'v20261107-0064';
+const CACHE_BUSTER = 'v20261122-0069';
 
 // ビルドバージョンをグローバルに公開
 window.BUILD_VERSION = CACHE_BUSTER;
@@ -202,6 +203,14 @@ class Game {
 
         // ゲーム状態を復元
         this.saveManager.restoreGameState(this.gameState, saveData.gameState);
+        const room = this.gameState.room;
+        if (room) {
+            try {
+                if (!hasStartedRoom(room.code)) recordRoomStart(room.code);
+            } catch {
+                this.uiController.showFloatNotification('部屋コードのプレイ記録を保存できませんでした。', 'warning');
+            }
+        }
 
         window.CDG_DEBUG && console.log('[SAVE-DEBUG] restoreFromSave: 復元後 phase=', this.gameState.phase, ', turn=', this.gameState.turn);
         window.CDG_DEBUG && console.log('[SAVE-DEBUG] restoreFromSave: 復元後 currentTrainingCards=', this.gameState.currentTrainingCards?.map(c => c.cardName));

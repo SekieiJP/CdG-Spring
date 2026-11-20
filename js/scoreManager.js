@@ -1,9 +1,9 @@
 /**
  * ScoreManager - スコア計算・記録・共有
  */
-import { getHighScoreKey, getDifficultyConfig } from './difficultyConfig.js?v=20261107-0064';
-import { isEventActive } from './eventManager.js?v=20261107-0064';
-import { fingerprint } from './playRecord.js?v=20261107-0064';
+import { getHighScoreKey, getDifficultyConfig, getDifficultyDisplayName } from './difficultyConfig.js?v=20261122-0069';
+import { isEventActive } from './eventManager.js?v=20261122-0069';
+import { fingerprint } from './playRecord.js?v=20261122-0069';
 
 export class ScoreManager {
     constructor(logger, { migrateHighScore = true } = {}) {
@@ -83,6 +83,7 @@ export class ScoreManager {
 
                     const baseRow = {
                         grade,
+                        title: getCell(cells, '称号') || null,
                         thresholds: {
                             experience: toNullableInt(getCell(cells, '体験基準')),
                             enrollment: toNullableInt(getCell(cells, '入塾基準')),
@@ -141,6 +142,29 @@ export class ScoreManager {
 
         const currentRow = this.rankTable[currentIndex];
         const currentThreshold = currentRow?.thresholds?.[statKey] ?? 0;
+        const config = getDifficultyConfig(difficulty);
+        if (config.id === 'int' && statKey === 'satisfaction') {
+            const milestones = [{ threshold: config.withdrawalBase, grade: '退塾基準' }];
+            let points = 0;
+            for (const row of this.rankTable) {
+                const threshold = row.thresholds.satisfaction;
+                if (threshold > config.withdrawalBase && row.scores.satisfaction > points) {
+                    milestones.push({ threshold, grade: row.grade });
+                    points = row.scores.satisfaction;
+                }
+            }
+            const targetIndex = milestones.findIndex(milestone => value < milestone.threshold);
+            const target = milestones[targetIndex];
+            const start = targetIndex < 0 ? milestones.at(-1) : milestones[targetIndex - 1];
+            return {
+                grade: currentRow.grade,
+                currentThreshold,
+                startThreshold: start?.threshold ?? 0,
+                nextThreshold: target?.threshold ?? milestones.at(-1).threshold,
+                deficit: target ? target.threshold - value : 0,
+                targetGrade: target?.grade ?? currentRow.grade
+            };
+        }
         const findGradeIndex = (grade) => this.rankTable.findIndex((row) => row?.grade === grade);
         const getScoreGroupStartThreshold = (scoreKey, thresholdGetter, currentScore) => {
             for (let i = 0; i < this.rankTable.length; i += 1) {
@@ -203,12 +227,15 @@ export class ScoreManager {
             };
         };
 
+        const getEnrollmentGaugeThreshold = row =>
+            config.id === 'int' ? row.thresholds.enrollment : row.enrollmentDiffThreshold;
+
         let target = null;
         let currentMobilizationScore = 0;
         let currentEnrollmentDiffScore = 0;
         let currentFreshDiffScore = 0;
 
-        if (getDifficultyConfig(difficulty).scoringModel === 'pro') {
+        if (config.scoringModel === 'pro') {
             if (statKey === 'experience') {
                 for (let i = this.rankTable.length - 1; i >= 0; i -= 1) {
                     const row = this.rankTable[i];
@@ -232,8 +259,8 @@ export class ScoreManager {
                     const row = this.rankTable[i];
                     if (
                         row?.scores?.enrollmentDiff !== null &&
-                        row?.enrollmentDiffThreshold !== null &&
-                        value >= row.enrollmentDiffThreshold
+                        getEnrollmentGaugeThreshold(row) !== null &&
+                        value >= getEnrollmentGaugeThreshold(row)
                     ) {
                         currentEnrollmentDiffScore = row.scores.enrollmentDiff;
                         break;
@@ -242,7 +269,7 @@ export class ScoreManager {
 
                 target = getScoreGroupTarget(
                     'enrollmentDiff',
-                    (row) => row?.enrollmentDiffThreshold,
+                    getEnrollmentGaugeThreshold,
                     currentEnrollmentDiffScore
                 );
             } else if (statKey === 'satisfaction' || statKey === 'accounting') {
@@ -309,7 +336,7 @@ export class ScoreManager {
         // --- startThreshold の計算 ---
         let startThreshold = currentThreshold; // デフォルト（逐次の場合）
 
-        if (getDifficultyConfig(difficulty).scoringModel === 'pro') {
+        if (config.scoringModel === 'pro') {
             if (statKey === 'experience') {
                 startThreshold = getScoreGroupStartThreshold(
                     'mobilization',
@@ -319,7 +346,7 @@ export class ScoreManager {
             } else if (statKey === 'enrollment') {
                 startThreshold = getScoreGroupStartThreshold(
                     'enrollmentDiff',
-                    (row) => row?.enrollmentDiffThreshold,
+                    getEnrollmentGaugeThreshold,
                     currentEnrollmentDiffScore
                 );
             } else if (statKey === 'satisfaction' || statKey === 'accounting') {
@@ -433,11 +460,11 @@ export class ScoreManager {
         } : { experience: 0, enrollmentDiff: 0, satisfaction: 0 };
         const points = eventMode ? Math.round((basePoints + overflow.experience + overflow.enrollmentDiff + overflow.satisfaction) * 10) / 10 : basePoints;
 
-        let rankGrade = this.rankTable[0]?.grade || 'F';
+        let rankRow = this.rankTable[0];
         for (let i = this.rankTable.length - 1; i >= 0; i -= 1) {
             const row = this.rankTable[i];
             if (row?.rankThreshold !== null && points >= row.rankThreshold) {
-                rankGrade = row.grade;
+                rankRow = row;
                 break;
             }
         }
@@ -448,6 +475,8 @@ export class ScoreManager {
         this.logger?.log(`入退差: ${enrollmentDiff}`, 'status');
         this.logger?.log(`目標ポイント: ${points}`, 'status');
 
+        const rankGrade = rankRow?.grade || 'F';
+        const rankTitle = gameState.difficulty === 'int' ? rankRow?.title : PRO_RANK_NAMES[rankGrade];
         return {
             points,
             displayScore: points,
@@ -460,7 +489,7 @@ export class ScoreManager {
             accounting: gameState.player.accounting,
             rank: {
                 grade: rankGrade,
-                name: PRO_RANK_NAMES[rankGrade] || rankGrade
+                name: rankTitle || rankGrade
             },
             breakdown: {
                 mobilizationPoints,
@@ -480,8 +509,9 @@ export class ScoreManager {
         const accounting = gameState.player.accounting;
         const satisfaction = gameState.player.satisfaction;
 
-        const accountingShortage = Math.max(15 - accounting, 0);
-        const satisfactionShortage = Math.max(15 - satisfaction, 0);
+        const withdrawalBase = getDifficultyConfig(gameState.difficulty || 'fresh').withdrawalBase ?? 15;
+        const accountingShortage = Math.max(withdrawalBase - accounting, 0);
+        const satisfactionShortage = Math.max(withdrawalBase - satisfaction, 0);
 
         return accountingShortage + satisfactionShortage;
     }
@@ -639,7 +669,8 @@ export class ScoreManager {
      * @param {string} [difficulty='fresh'] - 難易度ID
      */
     saveHighScore(score, difficulty = 'fresh', gameState = null) {
-        if (gameState?.battle?.sameSeed) return false;
+        if (gameState?.room) return false;
+        if (gameState?.battle?.kind === 'replay' && gameState.battle.sameSeed) return false;
         try {
             const current = this.getHighScore(difficulty, gameState);
 
@@ -654,7 +685,7 @@ export class ScoreManager {
                     ...score
                 }));
 
-                this.logger?.log(`新ハイスコア記録: ${score.points}ポイント (${difficulty.toUpperCase()})`, 'action');
+                this.logger?.log(`新ハイスコア記録: ${score.points}ポイント (${getDifficultyDisplayName(difficulty)})`, 'action');
                 return true;
             }
         } catch (error) {

@@ -1,8 +1,10 @@
-import { decodeReplay } from './replayCodec.js?v=20261107-0064';
-import { getCurrentEvent } from './eventManager.js?v=20261107-0064';
-import { cpuTrainingAdvice, cpuMeetingAdvice } from './battleAdvice.js?v=20261107-0064';
+import { getDifficultyConfig, getDifficultyDisplayName } from './difficultyConfig.js?v=20261122-0069';
+import { decodeReplay } from './replayCodec.js?v=20261122-0069';
+import { getCurrentEvent } from './eventManager.js?v=20261122-0069';
+import { cpuTrainingAdvice, cpuMeetingAdvice, masterOpponentAdvice } from './battleAdvice.js?v=20261122-0069';
 import { BATTLE_STATS, validateBattleReplay, opponentSnapshot, opponentDeck, opponentFrames,
-    interimScore, battleSummary } from './battleReplay.js?v=20261107-0064';
+    interimScore, battleSummary } from './battleReplay.js?v=20261122-0069';
+import { createRoomCode, hasStartedRoom, parseRoomCode } from './colleagueRoom.js?v=20261122-0069';
 
 const LABELS = { experience: '体験', enrollment: '入塾', satisfaction: '満足', accounting: '経理' };
 const ANIMATION_STATS = { experience: 'exp', enrollment: 'enr', satisfaction: 'sat', accounting: 'acc' };
@@ -69,23 +71,46 @@ export class BattleController {
         document.getElementById('battle-lobby')?.remove();
         const overlay = this.ui.createInfoOverlay('対戦ロビー'); overlay.id = 'battle-lobby';
         const content = overlay.querySelector('.info-overlay-content');
-        content.innerHTML = `<div class="battle-lobby-tabs" role="group" aria-label="対戦相手">
+        const difficulties = ['fresh', 'pro', 'int'].map(id =>
+            `<option value="${id}">${getDifficultyDisplayName(id)}</option>`).join('');
+        content.innerHTML = `<div class="battle-lobby-tabs" role="group" aria-label="対戦方法">
             <button type="button" id="battle-kind-replay" class="btn-primary" aria-pressed="true">リプレイと対戦</button>
-            <button type="button" id="battle-kind-cpu" class="btn-secondary" aria-pressed="false">あひる先生と対戦</button></div>
+            <button type="button" id="battle-kind-cpu" class="btn-secondary" aria-pressed="false">あひる先生と対戦</button>
+            <button type="button" id="battle-kind-room" class="btn-secondary" aria-pressed="false">同僚と対戦</button></div>
             <div id="battle-replay-controls"><label for="battle-replay-input">リプレイデータ</label>
             <textarea id="battle-replay-input" rows="5" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off" placeholder="コピーしたリプレイデータを貼り付けてください"></textarea>
             <button type="button" id="battle-load-replay" class="btn-secondary">リプレイを読み込む</button>
             <p id="battle-replay-summary"></p>
             <label class="battle-check"><input id="battle-same-seed" type="checkbox">リプレイデータと同一シード</label>
-            <p class="result-note">同一シードではハイスコアを記録しません。選ぶカードによって、候補や手札は変わります。</p>
+            <p class="result-note">同一シードではハイスコアを記録しません。リフレッシュや発想研修で候補を引くと、次の候補が先へ進みます。</p>
             <label id="battle-event-label" class="battle-check hidden"><input id="battle-event" type="checkbox">開催中のイベントを自分に適用する</label></div>
             <div id="battle-cpu-controls" class="hidden"><label for="battle-difficulty">ゲーム難易度</label>
-            <select id="battle-difficulty"><option value="fresh">FRESH</option><option value="pro">PRO</option></select>
+            <select id="battle-difficulty">${difficulties}</select>
+            <label class="battle-check"><input id="battle-cpu-same-seed" type="checkbox" checked>あひる先生と同じシードで対戦する</label>
+            <p class="result-note">シードは対戦のたびに変わります。同じシードでも自己ベストを記録し、スコアを送信します。</p>
             <p>あひる先生は自分の教室を独立して運営します。あなたへの取得アシストとアドバイスはお休みです。</p></div>
+            <div id="battle-room-controls" class="hidden">
+            <p>同じ部屋コードを使って、同じ条件で遊べます。</p>
+            <div class="battle-lobby-tabs" role="group" aria-label="部屋の操作">
+                <button type="button" id="battle-room-mode-create" class="btn-primary" aria-pressed="true">部屋を作成</button>
+                <button type="button" id="battle-room-mode-join" class="btn-secondary" aria-pressed="false">部屋に入る</button>
+            </div>
+            <div id="battle-room-create-controls">
+                <label for="battle-room-difficulty">ゲーム難易度</label>
+                <select id="battle-room-difficulty">${difficulties}</select>
+                <button type="button" id="battle-room-create-start" class="btn-primary">部屋を作成して開始</button>
+            </div>
+            <div id="battle-room-join-controls" class="hidden">
+                <label for="battle-room-code-input">部屋コード</label>
+                <input id="battle-room-code-input" type="text" inputmode="numeric" pattern="[0-9０-９]*" autocapitalize="off" autocomplete="one-time-code" spellcheck="false" aria-describedby="battle-room-detected battle-lobby-message" placeholder="1〜6で始まる数字8桁">
+                <p id="battle-room-detected" aria-live="polite"></p>
+                <button type="button" id="battle-room-join-start" class="btn-primary" disabled>部屋に入って開始</button>
+            </div>
+            </div>
             <p id="battle-lobby-message" role="status" aria-live="polite"></p>
             <button type="button" id="battle-start" class="btn-primary" disabled>対戦開始</button>`;
         document.body.appendChild(overlay);
-        let kind = 'replay'; let loaded = preset?.opponent || null; let busy = false;
+        let kind = 'replay'; let roomAction = 'create'; let loaded = preset?.opponent || null; let busy = false;
         const input = content.querySelector('#battle-replay-input');
         input.addEventListener('paste', event => {
             const text = event.clipboardData?.getData('text/plain');
@@ -98,28 +123,75 @@ export class BattleController {
         const message = content.querySelector('#battle-lobby-message');
         const summary = content.querySelector('#battle-replay-summary');
         const eventLabel = content.querySelector('#battle-event-label');
+        const roomInput = content.querySelector('#battle-room-code-input');
+        const roomDetected = content.querySelector('#battle-room-detected');
+        const roomCreate = content.querySelector('#battle-room-create-start');
+        const roomJoin = content.querySelector('#battle-room-join-start');
+        const roomDifficulty = content.querySelector('#battle-room-difficulty');
         content.querySelector('#battle-difficulty').value = preset?.opponent?.metadata.difficulty || this.ui.selectedDifficulty || 'fresh';
-        const update = () => { start.disabled = busy || kind === 'replay' && !loaded; };
+        content.querySelector('#battle-room-difficulty').value = this.ui.selectedDifficulty || 'fresh';
+        if (preset?.kind === 'cpu') content.querySelector('#battle-cpu-same-seed').checked = preset.sameSeed;
+        const updateRoomInput = () => {
+            const parsed = parseRoomCode(roomInput.value);
+            const hasText = roomInput.value.trim().length > 0;
+            roomDetected.textContent = parsed ? `${getDifficultyDisplayName(parsed.difficulty)}で開始します。`
+                : hasText ? '部屋コードは1〜6で始まる数字8桁で入力してください' : '';
+            roomJoin.disabled = busy || !parsed;
+        };
+        const update = () => {
+            start.disabled = busy || kind === 'replay' && !loaded;
+            roomCreate.disabled = busy;
+            roomInput.disabled = busy;
+            roomDifficulty.disabled = busy;
+            updateRoomInput();
+        };
         const select = selected => {
             if (busy) return;
             kind = selected; message.textContent = '';
             content.querySelector('#battle-replay-controls').classList.toggle('hidden', kind !== 'replay');
             content.querySelector('#battle-cpu-controls').classList.toggle('hidden', kind !== 'cpu');
-            for (const item of ['replay', 'cpu']) {
+            content.querySelector('#battle-room-controls').classList.toggle('hidden', kind !== 'room');
+            start.classList.toggle('hidden', kind === 'room');
+            for (const item of ['replay', 'cpu', 'room']) {
                 const button = content.querySelector(`#battle-kind-${item}`);
                 button.setAttribute('aria-pressed', String(item === kind));
                 button.className = item === kind ? 'btn-primary' : 'btn-secondary';
             }
             update();
         };
+        const selectRoomAction = selected => {
+            if (busy) return;
+            roomAction = selected;
+            message.textContent = '';
+            content.querySelector('#battle-room-create-controls').classList.toggle('hidden', roomAction !== 'create');
+            content.querySelector('#battle-room-join-controls').classList.toggle('hidden', roomAction !== 'join');
+            for (const item of ['create', 'join']) {
+                const button = content.querySelector(`#battle-room-mode-${item}`);
+                button.setAttribute('aria-pressed', String(item === roomAction));
+                button.className = item === roomAction ? 'btn-primary' : 'btn-secondary';
+            }
+            updateRoomInput();
+        };
         content.querySelector('#battle-kind-replay').onclick = () => select('replay');
         content.querySelector('#battle-kind-cpu').onclick = () => select('cpu');
+        content.querySelector('#battle-kind-room').onclick = () => select('room');
+        content.querySelector('#battle-room-mode-create').onclick = () => selectRoomAction('create');
+        content.querySelector('#battle-room-mode-join').onclick = () => selectRoomAction('join');
         if (loaded) {
-            summary.textContent = `${loaded.metadata.difficulty.toUpperCase()} ／ ${loaded.metadata.buildVersion} ／ 同じリプレイで再戦します`;
+            summary.textContent = `${getDifficultyDisplayName(loaded.metadata.difficulty)} ／ ${loaded.metadata.buildVersion} ／ 同じリプレイで再戦します`;
             eventLabel.classList.toggle('hidden', !(getCurrentEvent() && (loaded.metadata.eventId || loaded.metadata.calcMode)));
         }
         select(preset?.kind || 'replay');
+        selectRoomAction('create');
         input.oninput = () => { loaded = null; summary.textContent = ''; eventLabel.classList.add('hidden'); update(); };
+        roomInput.oninput = () => { message.textContent = ''; updateRoomInput(); };
+        roomInput.addEventListener('paste', event => {
+            const text = event.clipboardData?.getData('text/plain');
+            if (!text) return;
+            event.preventDefault();
+            roomInput.setRangeText(text, roomInput.selectionStart, roomInput.selectionEnd, 'end');
+            roomInput.dispatchEvent(new Event('input', { bubbles: true }));
+        });
         content.querySelector('#battle-load-replay').onclick = async () => {
             const text = input.value; const request = ++this.request; loaded = null; busy = true; update();
             message.textContent = 'リプレイを確認しています。';
@@ -128,7 +200,7 @@ export class BattleController {
                 if (request !== this.request || input.value !== text || !overlay.isConnected) return;
                 loaded = record;
                 const mode = record.metadata.eventId ? 'イベント' + (record.metadata.calcMode ? '・計算機' : '') : record.metadata.calcMode ? '計算機' : '通常';
-                summary.textContent = `${record.metadata.difficulty.toUpperCase()} ／ 元のモード：${mode} ／ ${record.metadata.buildVersion}`;
+                summary.textContent = `${getDifficultyDisplayName(record.metadata.difficulty)} ／ 元のモード：${mode} ／ ${record.metadata.buildVersion}`;
                 eventLabel.classList.toggle('hidden', !(getCurrentEvent() && (record.metadata.eventId || record.metadata.calcMode)));
                 message.textContent = '対戦できます。';
             } catch (error) { if (request === this.request) message.textContent = error.message; }
@@ -138,6 +210,56 @@ export class BattleController {
         const cancel = () => { this.cancelCpu?.(); this.request++; };
         close?.addEventListener('click', cancel);
         overlay.addEventListener('keydown', event => { if (event.key === 'Escape') cancel(); });
+        const startRoom = async ({ parsed, created }) => {
+            if (busy) return;
+            busy = true;
+            const request = ++this.request;
+            update();
+            message.textContent = 'ゲームを準備しています。';
+            try {
+                const revenge = hasStartedRoom(parsed.code);
+                if (revenge) {
+                    const accepted = await this.confirmRoomRevenge();
+                    if (!accepted || request !== this.request || !overlay.isConnected) return;
+                }
+                const room = { code: parsed.code, revenge };
+                const canStart = () => {
+                    return request === this.request && overlay.isConnected;
+                };
+                const started = await this.ui.onStartGame({
+                    difficulty: parsed.difficulty, seed: parsed.seed, room, eventEnabled: false, canStart
+                });
+                if (started !== true) {
+                    if (request === this.request && overlay.isConnected) {
+                        message.textContent = '部屋を開始できませんでした。もう一度お試しください。';
+                    }
+                    return;
+                }
+                overlay.remove();
+                if (created) this.showRoomCode(parsed.code);
+            } catch (error) {
+                if (request === this.request && overlay.isConnected) {
+                    message.textContent = `部屋を開始できませんでした。${error.message}`;
+                }
+            } finally {
+                busy = false;
+                update();
+                const trigger = created ? roomCreate : roomJoin;
+                if (overlay.isConnected) trigger.focus({ preventScroll: true });
+            }
+        };
+        roomCreate.onclick = () => {
+            try {
+                const difficulty = content.querySelector('#battle-room-difficulty').value;
+                const code = createRoomCode(difficulty);
+                startRoom({ parsed: parseRoomCode(code), created: true });
+            } catch (error) { message.textContent = `部屋を作成できませんでした。${error.message}`; }
+        };
+        roomJoin.onclick = () => {
+            const parsed = parseRoomCode(roomInput.value);
+            if (!parsed) { message.textContent = '部屋コードは1〜6で始まる数字8桁で入力してください'; return; }
+            startRoom({ parsed, created: false });
+        };
         start.onclick = async () => {
             if (busy || kind === 'replay' && !loaded) return;
             busy = true; update(); const request = ++this.request;
@@ -146,10 +268,10 @@ export class BattleController {
                 const preparing = difficulty === 'pro' ? 'あひる先生が教材研究中…' : 'あひる先生が準備しています…';
                 if (kind === 'cpu') message.textContent = preparing;
                 const opponent = kind === 'cpu' ? await this.createCpu(difficulty, progress => {
-                    message.textContent = `${preparing} ${progress}/8ターン`;
+                    message.textContent = `${preparing} ${progress}/${getDifficultyConfig(difficulty).turns.length}ターン`;
                 }) : loaded;
                 if (request !== this.request || !overlay.isConnected) return;
-                const same = kind === 'replay' && content.querySelector('#battle-same-seed').checked;
+                const same = content.querySelector(kind === 'cpu' ? '#battle-cpu-same-seed' : '#battle-same-seed').checked;
                 const seed = same ? opponent.metadata.seed : `battle:${crypto.randomUUID()}`;
                 const battle = { schema: 1, kind, opponent, sameSeed: seed === opponent.metadata.seed, animation: null };
                 const eventEnabled = kind === 'replay' && !eventLabel.classList.contains('hidden') && content.querySelector('#battle-event').checked;
@@ -158,6 +280,86 @@ export class BattleController {
             } catch (error) { message.textContent = `対戦を開始できませんでした。${error.message}`; }
             finally { busy = false; update(); }
         };
+    }
+    showRoomCode(code) {
+        const parsed = parseRoomCode(code);
+        if (!parsed) throw new TypeError('部屋コードの形式が正しくありません。');
+        document.getElementById('room-code-overlay')?.remove();
+        const overlay = this.ui.createInfoOverlay('部屋コード'); overlay.id = 'room-code-overlay';
+        const content = overlay.querySelector('.info-overlay-content');
+        content.innerHTML = `<p>同僚にこのコードを共有してください。</p>
+            <input id="room-code-display" type="text" inputmode="none" readonly value="${parsed.code}" aria-label="部屋コード">
+            <p id="room-code-copy-message" role="status" aria-live="polite"></p>
+            <button type="button" id="room-code-copy" class="btn-secondary">コードをコピー</button>
+            <button type="button" id="room-code-ok" class="btn-primary">OK</button>`;
+        document.body.appendChild(overlay);
+        const codeInput = content.querySelector('#room-code-display');
+        const copyMessage = content.querySelector('#room-code-copy-message');
+        content.querySelector('#room-code-copy').onclick = async () => {
+            try {
+                if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+                await navigator.clipboard.writeText(parsed.code);
+                copyMessage.textContent = 'コードをコピーしました。';
+            } catch {
+                codeInput.focus(); codeInput.select();
+                try {
+                    if (document.execCommand('copy')) copyMessage.textContent = 'コードをコピーしました。';
+                    else copyMessage.textContent = 'コードを選択しました。コピーしてください。';
+                } catch { copyMessage.textContent = 'コードを選択しました。コピーしてください。'; }
+            }
+        };
+        content.querySelector('#room-code-ok').addEventListener('click', () => {
+            overlay.remove();
+            document.querySelector('#training-cards .card[tabindex], #btn-training-skip:not(.hidden)')?.focus({ preventScroll: true });
+        });
+        this.trapDialogKeyboard(overlay, '#room-code-ok');
+        return overlay;
+    }
+    confirmRoomRevenge() {
+        // 入力したコードを保ったままロビーへ戻れるよう、ロビーの上に表示する
+        const previousFocus = document.activeElement;
+        const overlay = document.createElement('div');
+        overlay.className = 'info-overlay'; overlay.id = 'room-revenge-overlay'; overlay.tabIndex = -1;
+        overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-modal', 'true');
+        overlay.setAttribute('aria-label', '部屋コードの確認');
+        overlay.innerHTML = `<div class="info-overlay-header"><span class="info-overlay-title">部屋コードの確認</span>
+                <button type="button" class="info-overlay-close" aria-label="閉じる">×</button></div>
+            <div class="info-overlay-content"><p>この部屋コードで遊んだことがあります。成績には<strong>リベンジ</strong>マークがつきます。</p>
+            <button type="button" id="room-revenge-ok" class="btn-primary">OK</button>
+            <button type="button" id="room-revenge-cancel" class="btn-secondary">キャンセル</button></div>`;
+        document.body.appendChild(overlay);
+        const content = overlay.querySelector('.info-overlay-content');
+        return new Promise(resolve => {
+            let settled = false;
+            const finish = accepted => {
+                if (settled) return;
+                settled = true;
+                overlay.remove();
+                previousFocus?.focus?.({ preventScroll: true });
+                resolve(accepted);
+            };
+            content.querySelector('#room-revenge-ok').addEventListener('click', () => finish(true));
+            content.querySelector('#room-revenge-cancel').addEventListener('click', () => finish(false));
+            overlay.querySelector('.info-overlay-close').addEventListener('click', () => finish(false));
+            overlay.addEventListener('keydown', event => {
+                if (event.key === 'Escape') { event.preventDefault(); finish(false); }
+            });
+            this.trapDialogKeyboard(overlay, '#room-revenge-ok');
+        });
+    }
+    trapDialogKeyboard(overlay, initialSelector) {
+        overlay.addEventListener('keydown', event => {
+            if (event.key !== 'Tab') return;
+            const focusable = [...overlay.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])')];
+            if (!focusable.length) { event.preventDefault(); return; }
+            const first = focusable[0], last = focusable.at(-1);
+            if (event.shiftKey && (document.activeElement === first || !overlay.contains(document.activeElement))) {
+                event.preventDefault(); last.focus();
+            } else if (!event.shiftKey && (document.activeElement === last || !overlay.contains(document.activeElement))) {
+                event.preventDefault(); first.focus();
+            }
+        });
+        queueMicrotask(() => overlay.isConnected && overlay.querySelector(initialSelector)?.focus({ preventScroll: true }));
     }
     createCpu(difficulty, progress) {
         return new Promise((resolve, reject) => {
@@ -239,7 +441,8 @@ export class BattleController {
         const opponent = this.state.battle.opponent;
         if (this.cpuSpeech?.opponent !== opponent || this.cpuSpeech.turn !== this.state.turn || this.cpuSpeech.phase !== this.state.phase) {
             const recommend = this.state.phase === 'meeting' ? cpuMeetingAdvice : cpuTrainingAdvice;
-            this.cpuSpeech = { opponent, turn: this.state.turn, phase: this.state.phase, advice: recommend(opponent, this.state.turn) };
+            this.cpuSpeech = { opponent, turn: this.state.turn, phase: this.state.phase, advice: this.state.difficulty === 'int'
+                ? masterOpponentAdvice(opponent, this.state.turn, this.state.phase) : recommend(opponent, this.state.turn) };
         }
         return this.cpuSpeech.advice;
     }
@@ -274,7 +477,7 @@ export class BattleController {
         try {
             for (let index = animation.cursor; index < frames.length; index++) {
                 const frame = frames[index]; clock.beginCard();
-                if (header) header.textContent = `${this.opponentName}\n教室行動 ${turn + 1}/8`;
+                if (header) header.textContent = `${this.opponentName}\n教室行動 ${turn + 1}/${this.state.totalTurns}`;
                 if (cards) {
                     const escape = value => this.ui._escapeHTML(String(value || ''));
                     cards.innerHTML = `<div class="animation-card-item battle-animation-card"><div class="anim-card-copy">
@@ -290,7 +493,8 @@ export class BattleController {
                 this.render(this.state.player, frame.after); this.ui.saveGameState();
                 await clock.wait(800);
             }
-            animation.visibleStats = structuredClone(battle.opponent.turns[turn].action.after.player);
+            const opponentTurn = battle.opponent.turns[turn];
+            animation.visibleStats = structuredClone((opponentTurn.outing || opponentTurn.action).after.player);
             animation.done = true; delete animation.visibleDelta;
             this.render(); this.ui.saveGameState();
         } finally {
@@ -309,7 +513,7 @@ export class BattleController {
         const summary = battleSummary(this.state, score);
         const escape = value => this.ui._escapeHTML(String(value ?? ''));
         const other = summary.opponentScore;
-        const pro = this.state.difficulty === 'pro';
+        const pro = this.state.config.scoringModel === 'pro';
         const players = [
             { name: 'あなた', icon: '👤', score, winner: summary.outcome === 'win' },
             { name: summary.opponentName, icon: this.state.battle.kind === 'cpu' ? '🐤' : '🎞️', score: other, winner: summary.outcome === 'lose' }
@@ -331,7 +535,7 @@ export class BattleController {
                 `<td>${player.score.splusBreakdown ? points(player.score.splusBreakdown[key]) : '—'}</td>`).join('')}</tr>`;
         }).join('');
         const result = document.createElement('section'); result.id = 'battle-result';
-        result.innerHTML = `<p class="battle-result-context">${pro ? 'PRO' : 'FRESH'} · ${escape(summary.opponentName)}と対戦</p>
+        result.innerHTML = `<p class="battle-result-context">${escape(this.state.config.name)} · ${escape(summary.opponentName)}と対戦</p>
             <div id="battle-outcome" class="battle-outcome ${summary.outcome}">${OUTCOMES[summary.outcome]}</div>
             <div class="battle-final-score">${players.map(player => `<section class="battle-player-result${player.winner ? ' winner' : ''}">
                 <h3>${player.icon} ${escape(player.name)}${player.winner ? '<span class="battle-result-crown" aria-label="勝者">👑</span>' : ''}</h3>
@@ -341,18 +545,18 @@ export class BattleController {
             <h3 class="battle-evaluation-heading">評価の比較</h3>
             <table class="battle-comparison-table"><thead><tr><th scope="col">項目</th><th scope="col">👤 あなた</th><th scope="col">${players[1].icon} ${escape(summary.opponentName)}</th></tr></thead>
             <tbody>${rows.map(([name, key, pointKey, overflowKey]) => `<tr><th scope="row">${name}</th>${cell(score, key, pointKey, overflowKey)}${cell(other, key, pointKey, overflowKey)}</tr>`).join('')}${precision}</tbody></table>
-            ${summary.sameSeed ? '<p class="result-note battle-same-seed-note">同一シードの対戦です。自己ベストの対象外です。</p>' : ''}`;
+            ${summary.sameSeed && summary.kind === 'replay' ? '<p class="result-note battle-same-seed-note">同一シードの対戦です。自己ベストの対象外です。</p>' : ''}`;
         document.getElementById('result-rank')?.before(result);
         const deckSection = document.createElement('div'); deckSection.id = 'battle-opponent-deck';
-        deckSection.innerHTML = `<details class="result-deck-details"><summary>${players[1].icon} ${escape(summary.opponentName)}の最終デッキ<span>${summary.opponentFinalDeck.length}枚</span></summary><div class="result-cards-grid"></div></details><details class="battle-result-build"><summary>バージョン・記録情報</summary><p class="result-build-info">${this.ui._buildInfoText()}</p></details>`;
+        deckSection.innerHTML = `<details class="result-deck-details" open><summary>${players[1].icon} ${escape(summary.opponentName)}の最終デッキ<span>${summary.opponentFinalDeck.length}枚</span></summary><div class="result-cards-grid"></div></details><details class="battle-result-build"><summary>バージョン・記録情報</summary><p class="result-build-info">${this.ui._buildInfoText()}</p></details>`;
         const grid = deckSection.querySelector('.result-cards-grid');
-        for (const card of this.state.battle.opponent.result.finalDeck) grid.appendChild(this.ui.createCardElement(card, { compact: true }));
+        this.ui.renderResultDeckThumbnails(grid, this.state.battle.opponent.result.finalDeck);
         document.getElementById('result-cards')?.after(deckSection);
         const rematch = document.createElement('button'); rematch.id = 'battle-rematch'; rematch.type = 'button';
         rematch.className = 'btn-primary'; rematch.textContent = '同じ相手と再戦';
         rematch.onclick = () => {
             const previous = this.state.battle;
-            this.ui.onRestart(); this.openLobby({ kind: previous.kind, opponent: previous.opponent });
+            this.ui.onRestart(); this.openLobby({ kind: previous.kind, opponent: previous.opponent, sameSeed: previous.sameSeed });
         };
         document.querySelector('#result-area .result-actions')?.prepend(rematch);
     }

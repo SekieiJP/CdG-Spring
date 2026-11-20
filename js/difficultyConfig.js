@@ -1,4 +1,4 @@
-import { DEFAULT_SLOTS, DEFAULT_TURNS } from './defaultRules.js?v=20261107-0064';
+import { DEFAULT_SLOTS, DEFAULT_TURNS } from './defaultRules.js?v=20261122-0069';
 /**
  * DifficultyConfig - 難易度設定の一元管理
  */
@@ -45,6 +45,11 @@ export function getDifficultyConfig(difficultyId = 'fresh') {
     const config = DIFFICULTY_CONFIG[String(difficultyId).toUpperCase()];
     if (!config) throw new Error(`未登録の難易度: ${difficultyId}`);
     return config;
+}
+
+export function getDifficultyDisplayName(difficultyId, savedName) {
+    const id = String(difficultyId ?? '').toUpperCase();
+    return DIFFICULTY_CONFIG[id]?.name || savedName || id;
 }
 
 /** 固有ルールは別モジュールから登録する。FRESHへの暗黙変換はしない。 */
